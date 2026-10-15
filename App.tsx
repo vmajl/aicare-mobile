@@ -1,652 +1,464 @@
-
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  TextInput,
-  useWindowDimensions,
-  StatusBar,
-  Platform,
+  Bell, Clock, CalendarDays, Pill, UsersRound, Camera, MessageCircle, Plus, X,
+  Search, Pencil, Trash2, Package, Sparkles, ArrowLeft, Bot, Mic, Send, Check,
+  CircleStop,
+} from 'lucide-react-native';
+import {
+  Alert, View, Text, StyleSheet, ScrollView, Pressable, TextInput,
+  StatusBar, Platform, useWindowDimensions, Switch, KeyboardAvoidingView,
 } from 'react-native';
+import MedicationAssistantScreen from './MedicationAssistantScreen';
 
-const BLUE = '#7DC8DF';
-const DARK = '#183B4E';
-const MUTED = '#718391';
-const BG = '#F4F8FA';
+const BLUE = '#50A9C3';
+const DARK = '#102F40';
+const MUTED = '#6D8794';
+const BG = '#F4FAFC';
+const BORDER = '#D8E3E8';
+const PALE_BLUE = '#E8F6FA';
 
-const menu = [
-  { icon: '⌂', label: 'Visão geral' },
-  { icon: '＋', label: 'Medicamentos' },
-  { icon: '▦', label: 'Calendário' },
-  { icon: '♡', label: 'Paciente' },
-  { icon: '♧', label: 'Familiares' },
-];
-
-const initialMedicines = [
-  { id: '1', name: 'Losartana', dose: '50 mg', time: '08:00', status: 'Pendente' },
-  { id: '2', name: 'Metformina', dose: '850 mg', time: '12:00', status: 'Pendente' },
-  { id: '3', name: 'Vitamina D', dose: '1 cápsula', time: '20:00', status: 'Agendado' },
+type Tab = 'Início' | 'Diário' | 'Medicamentos' | 'Pessoas';
+type Medicine = {
+  id: string;
+  name: string;
+  dosage: string;
+  instructions: string;
+  firstTime: string;
+  intervalHours: string;
+  continuous: boolean;
+  startDate: string;
+  endDate: string;
+  stockQuantity: string;
+  stockUnit: string;
+  unitsPerDose: string;
+  active: boolean;
+  administered: boolean;
+};
+const emptyMedicine = () => ({
+  name: '', dosage: '', instructions: '', firstTime: '08:00', intervalHours: '24',
+  continuous: true, startDate: new Date().toISOString().slice(0, 10), endDate: '',
+  stockQuantity: '', stockUnit: 'unidades', unitsPerDose: '1',
+});
+type MedicineDraft = ReturnType<typeof emptyMedicine>;
+const tabs: { label: Tab }[] = [
+  { label: 'Início' }, { label: 'Diário' }, { label: 'Medicamentos' }, { label: 'Pessoas' },
 ];
 
 export default function App() {
   const { width } = useWindowDimensions();
-  const desktop = width >= 800;
-  const compact = width < 480;
-
-  const [active, setActive] = useState('Visão geral');
+  const compact = width < 390;
+  const [activeTab, setActiveTab] = useState<Tab>('Início');
+  const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [search, setSearch] = useState('');
-  const [medicines, setMedicines] = useState(initialMedicines);
+  const [showMedicineForm, setShowMedicineForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<MedicineDraft>(emptyMedicine());
+  const [showAssistant, setShowAssistant] = useState(false);
 
-  function markAdministered(id: string) {
-    setMedicines(current =>
-      current.map(med =>
-        med.id === id
-          ? { ...med, status: med.status === 'Administrado' ? 'Pendente' : 'Administrado' }
-          : med
-      )
-    );
+  const filteredMedicines = useMemo(() => medicines.filter((medicine) =>
+    medicine.name.toLowerCase().includes(search.toLowerCase().trim())
+  ), [medicines, search]);
+
+  function updateDraft<K extends keyof MedicineDraft>(key: K, value: MedicineDraft[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  const filteredMedicines = medicines.filter(med =>
-    med.name.toLowerCase().includes(search.toLowerCase())
-  );
+  function openNewMedicineForm() {
+    setEditingId(null);
+    setDraft(emptyMedicine());
+    setShowMedicineForm(true);
+    setShowAssistant(false);
+    setActiveTab('Medicamentos');
+  }
 
-  function MedicineList() {
-    return (
-      <View style={styles.list}>
-        <TextInput
-          placeholder="Buscar medicamento..."
-          placeholderTextColor={MUTED}
-          value={search}
-          onChangeText={setSearch}
-          style={styles.input}
-        />
+  function openAssistant() {
+    setShowMedicineForm(false);
+    setShowAssistant(true);
+    setActiveTab('Medicamentos');
+  }
 
-        {filteredMedicines.map(med => (
-          <View key={med.id} style={styles.medicineCard}>
-            <View style={styles.medicineInfo}>
-              <Text style={styles.medicineName}>{med.name}</Text>
-              <Text style={styles.muted}>{med.dose}</Text>
-              <Text style={styles.muted}>Horário: {med.time}</Text>
-            </View>
+  function openEditMedicine(medicine: Medicine) {
+    setEditingId(medicine.id);
+    setDraft({
+      name: medicine.name, dosage: medicine.dosage, instructions: medicine.instructions,
+      firstTime: medicine.firstTime, intervalHours: medicine.intervalHours,
+      continuous: medicine.continuous, startDate: medicine.startDate, endDate: medicine.endDate,
+      stockQuantity: medicine.stockQuantity, stockUnit: medicine.stockUnit,
+      unitsPerDose: medicine.unitsPerDose,
+    });
+    setShowMedicineForm(true);
+    setShowAssistant(false);
+    setActiveTab('Medicamentos');
+  }
 
-            <View style={styles.statusArea}>
-              <Text style={[
-                styles.status,
-                med.status === 'Administrado' && styles.done,
-              ]}>
-                {med.status}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => markAdministered(med.id)}
-                style={styles.smallButton}
-              >
-                <Text style={styles.smallButtonText}>
-                  {med.status === 'Administrado' ? 'Desfazer' : 'Administrar'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        ))}
+  function saveMedicine() {
+    const { name, dosage, firstTime, intervalHours, startDate, endDate, stockQuantity, unitsPerDose, continuous } = draft;
+    if (!name.trim() || !dosage.trim() || !firstTime.trim() || !startDate.trim()) {
+      Alert.alert('Campos obrigatórios', 'Informe nome, dosagem, primeiro horário e data de início.');
+      return;
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
+      Alert.alert('Horário inválido', 'Use o formato HH:MM, por exemplo 08:00.');
+      return;
+    }
+    const interval = Number(intervalHours);
+    if (!Number.isFinite(interval) || interval < 1 || interval > 168) {
+      Alert.alert('Intervalo inválido', 'Informe um intervalo entre 1 e 168 horas.');
+      return;
+    }
+    if (!continuous && (!endDate.trim() || endDate < startDate)) {
+      Alert.alert('Data de término', 'Informe uma data final igual ou posterior à data de início.');
+      return;
+    }
+    if (stockQuantity.trim() && (!Number.isFinite(Number(stockQuantity)) || Number(stockQuantity) < 0)) {
+      Alert.alert('Estoque inválido', 'A quantidade em estoque deve ser zero ou maior.');
+      return;
+    }
+    if (!Number.isFinite(Number(unitsPerDose)) || Number(unitsPerDose) <= 0) {
+      Alert.alert('Quantidade por dose inválida', 'Informe um valor maior que zero.');
+      return;
+    }
+    const existing = editingId ? medicines.find((item) => item.id === editingId) : undefined;
+    const saved: Medicine = {
+      id: editingId ?? `${Date.now()}`,
+      name: name.trim(), dosage: dosage.trim(), instructions: draft.instructions.trim(),
+      firstTime: firstTime.trim(), intervalHours: String(interval),
+      continuous, startDate, endDate: continuous ? '' : endDate,
+      stockQuantity: stockQuantity.trim(), stockUnit: draft.stockUnit,
+      unitsPerDose: String(Number(unitsPerDose)), active: existing?.active ?? true,
+      administered: existing?.administered ?? false,
+    };
+    setMedicines((current) => editingId
+      ? current.map((item) => item.id === editingId ? saved : item)
+      : [...current, saved]
+    );
+    setDraft(emptyMedicine());
+    setEditingId(null);
+    setShowMedicineForm(false);
+    setSearch('');
+    Alert.alert('Medicamento salvo', 'O cadastro foi salvo nesta sessão do aplicativo.');
+  }
 
-        {filteredMedicines.length === 0 && (
-          <Text style={styles.muted}>Nenhum medicamento encontrado.</Text>
-        )}
+  function deleteMedicine(medicine: Medicine) {
+    Alert.alert('Excluir medicamento', `Deseja excluir ${medicine.name}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Excluir', style: 'destructive', onPress: () => {
+        setMedicines((current) => current.filter((item) => item.id !== medicine.id));
+      }},
+    ]);
+  }
 
-        <Text style={styles.disclaimer}>
-          Dados demonstrativos. Os registros não são salvos permanentemente.
-        </Text>
+  function toggleMedicine(id: string) {
+    setMedicines((current) => current.map((medicine) =>
+      medicine.id === id ? { ...medicine, administered: !medicine.administered } : medicine
+    ));
+  }
+
+  function confirmAssistantMedication(data: { name: string; dose: string; schedule: string; instructions: string }) {
+    const match = data.schedule.match(/(\d{1,2}:\d{2})/);
+    const time = match?.[1] ?? '';
+    if (!data.name.trim() || !data.dose.trim() || !time) {
+      Alert.alert(
+        'Confira os dados',
+        'Para transferir ao cadastro, informe nome, dose e um primeiro horário no formato HH:MM. Você também pode continuar pelo formulário manual.',
+      );
+      return;
+    }
+    setEditingId(null);
+    setDraft({
+      ...emptyMedicine(),
+      name: data.name.trim(),
+      dosage: data.dose.trim(),
+      firstTime: time,
+      instructions: data.instructions.trim(),
+      continuous: true,
+    });
+    setShowAssistant(false);
+    setShowMedicineForm(true);
+    setActiveTab('Medicamentos');
+    Alert.alert('Dados transferidos', 'Revise os campos restantes e salve o medicamento no formulário.');
+  }
+
+  function Header() {
+    return <View style={styles.header}>
+      <View style={styles.headerLeft}>
+        <View style={styles.notificationIcon}><Bell size={24} color="#FFFFFF" strokeWidth={2} /></View>
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerEyebrow}>ACOMPANHAMENTO AICARE</Text>
+          <Text style={styles.headerTitle}>Área do cuidador</Text>
+        </View>
       </View>
-    );
+      <Pressable accessibilityRole="button" onPress={() => { setShowAssistant(false); setActiveTab('Pessoas'); }} style={styles.userPill}>
+        <Text style={styles.userName}>Maria</Text>
+        <View style={styles.userAvatar}><Text style={styles.userAvatarText}>M</Text></View>
+      </Pressable>
+    </View>;
   }
 
-  function ScreenContent() {
-    if (active === 'Medicamentos') {
-      return (
-        <>
-          <Text style={styles.heading}>Medicamentos</Text>
-          <Text style={styles.subtitle}>
-            Consulte os horários e marque as doses administradas.
-          </Text>
-          <MedicineList />
-        </>
-      );
-    }
-
-    if (active === 'Calendário') {
-      return (
-        <>
-          <Text style={styles.heading}>Calendário</Text>
-          <Text style={styles.subtitle}>
-            Programação diária de medicamentos.
-          </Text>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Hoje</Text>
-            {medicines.map(med => (
-              <View key={med.id} style={styles.calendarRow}>
-                <Text style={styles.time}>{med.time}</Text>
-                <View style={styles.medicineInfo}>
-                  <Text style={styles.medicineName}>{med.name}</Text>
-                  <Text style={styles.muted}>{med.dose}</Text>
-                </View>
-                <Text style={styles.muted}>{med.status}</Text>
-              </View>
-            ))}
-          </View>
-        </>
-      );
-    }
-
-    if (active === 'Paciente') {
-      return (
-        <>
-          <Text style={styles.heading}>Paciente</Text>
-          <View style={styles.card}>
-            <View style={styles.patientAvatar}>
-              <Text style={styles.patientAvatarText}>C</Text>
-            </View>
-            <Text style={styles.patientName}>Creusa</Text>
-            <Text style={styles.muted}>Perfil demonstrativo da paciente</Text>
-            <View style={styles.separator} />
-            <Text style={styles.cardTitle}>Informações</Text>
-            <Text style={styles.muted}>
-              Os dados pessoais poderão ser cadastrados na próxima etapa.
-            </Text>
-          </View>
-        </>
-      );
-    }
-
-    if (active === 'Familiares') {
-      return (
-        <>
-          <Text style={styles.heading}>Familiares</Text>
-          <Text style={styles.subtitle}>
-            Área de acompanhamento compartilhado.
-          </Text>
-          <View style={styles.card}>
-            <View style={styles.familyAvatar}>
-              <Text style={styles.avatarText}>C</Text>
-            </View>
-            <Text style={styles.cardTitle}>Cuidador</Text>
-            <Text style={styles.muted}>Conta demonstrativa</Text>
-            <View style={styles.separator} />
-            <Text style={styles.muted}>
-              O convite de familiares e o controle de acesso serão implementados
-              em uma próxima etapa.
-            </Text>
-          </View>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <View style={styles.greeting}>
-          <View style={styles.greetingText}>
-            <Text style={styles.eyebrow}>PAINEL DE CUIDADOS</Text>
-            <Text style={styles.heading}>Olá, cuidador!</Text>
-            <Text style={styles.subtitle}>
-              Acompanhe a rotina de cuidados de hoje.
-            </Text>
-          </View>
-          <View style={styles.dateBadge}>
-            <Text style={styles.dateText}>Hoje</Text>
-          </View>
-        </View>
-
-        <Pressable
-          onPress={() => setActive('Paciente')}
-          style={styles.patientCard}
-        >
-          <View style={styles.patientAvatar}>
-            <Text style={styles.patientAvatarText}>C</Text>
-          </View>
-          <View style={styles.patientInfo}>
-            <Text style={styles.eyebrow}>PACIENTE SELECIONADA</Text>
-            <Text style={styles.patientName}>Creusa</Text>
-            <Text style={styles.muted}>Perfil demonstrativo</Text>
-          </View>
-          <Text style={styles.patientHeart}>♡</Text>
+  function MedicineCard({ medicine }: { medicine: Medicine }) {
+    return <View style={styles.medicineCard}>
+      <View style={styles.medicineInfo}>
+        <Text style={styles.medicineName}>{medicine.name}</Text>
+        <Text style={styles.bodyText}>{medicine.dosage}</Text>
+        <Text style={styles.bodyText}>Horário inicial: {medicine.firstTime} · Intervalo: {medicine.intervalHours}h</Text>
+        {!!medicine.instructions && <Text style={styles.smallDescription}>Instruções: {medicine.instructions}</Text>}
+        <Text style={styles.smallDescription}>{medicine.continuous ? 'Uso contínuo' : `Até ${medicine.endDate}`}</Text>
+        {!!medicine.stockQuantity && <Text style={styles.smallDescription}>Estoque: {medicine.stockQuantity} {medicine.stockUnit}</Text>}
+        {!medicine.active && <Text style={styles.smallDescription}>Inativo</Text>}
+      </View>
+      <View style={styles.medicineActions}>
+        <Text style={[styles.statusPill, medicine.administered && styles.statusDone]}>
+          {medicine.administered ? 'Administrado' : 'Pendente'}
+        </Text>
+        <Pressable onPress={() => toggleMedicine(medicine.id)} style={styles.primarySmallButton}>
+          <Text style={styles.primarySmallButtonText}>{medicine.administered ? 'Desfazer' : 'Administrar'}</Text>
         </Pressable>
-
-        <View style={styles.stats}>
-          <View style={styles.statCard}>
-            <Text style={styles.statTitle}>Medicamentos</Text>
-            <Text style={styles.statValue}>{medicines.length}</Text>
-            <Text style={styles.muted}>Na programação</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statTitle}>Administrados</Text>
-            <Text style={styles.statValue}>
-              {medicines.filter(m => m.status === 'Administrado').length}
-            </Text>
-            <Text style={styles.muted}>Doses registradas</Text>
-          </View>
+        <View style={styles.iconActions}>
+          <Pressable accessibilityLabel={`Editar ${medicine.name}`} onPress={() => openEditMedicine(medicine)} style={styles.iconButton}><Pencil size={17} color={BLUE} /></Pressable>
+          <Pressable accessibilityLabel={`Excluir ${medicine.name}`} onPress={() => deleteMedicine(medicine)} style={styles.iconButton}><Trash2 size={17} color="#B54A4A" /></Pressable>
         </View>
-
-        <View style={styles.sectionHeader}>
-          <View style={styles.medicineInfo}>
-            <Text style={styles.cardTitle}>Medicamentos de hoje</Text>
-            <Text style={styles.muted}>Confira os registros.</Text>
-          </View>
-          <Pressable
-            onPress={() => setActive('Medicamentos')}
-            style={styles.linkButton}
-          >
-            <Text style={styles.linkText}>Ver todos →</Text>
-          </Pressable>
-        </View>
-
-        <MedicineList />
-
-        <View style={styles.footerNote}>
-          <Text style={styles.patientHeart}>♡</Text>
-          <View style={styles.medicineInfo}>
-            <Text style={styles.cardTitle}>Cuidado compartilhado</Text>
-            <Text style={styles.muted}>
-              Uma rotina organizada ajuda familiares e cuidadores.
-            </Text>
-          </View>
-        </View>
-      </>
-    );
+      </View>
+    </View>;
   }
 
+  function EmptyMedicines({ title = 'Nenhum medicamento cadastrado' }: { title?: string } = {}) {
+    return <View style={styles.emptyCard}>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyDescription}>Cadastre um medicamento para organizar horários e acompanhar o estoque.</Text>
+    </View>;
+  }
+
+  function NewMedicineCard() {
+    return <View style={styles.newMedicineCard}>
+      <View style={styles.newMedicineText}>
+        <View style={styles.rowTitle}><MessageCircle size={21} color={BLUE} strokeWidth={2} /><Text style={styles.cardTitle}>Novo medicamento</Text></View>
+        <Text style={styles.smallDescription}>Cadastre por conversa com o assistente ou preencha manualmente.</Text>
+        <Pressable onPress={openAssistant} style={styles.assistantLink}>
+          <Sparkles size={16} color={BLUE} /><Text style={styles.assistantLinkText}>Conversar com o assistente</Text>
+        </Pressable>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Adicionar medicamento manualmente" onPress={openNewMedicineForm} style={styles.addButton}>
+        <Plus size={23} color={DARK} strokeWidth={2} />
+      </Pressable>
+    </View>;
+  }
+
+  function Field({ label, value, onChangeText, placeholder, keyboardType = 'default' }: {
+    label: string; value: string; onChangeText: (value: string) => void; placeholder: string;
+    keyboardType?: 'default' | 'numeric' | 'decimal-pad';
+  }) {
+    return <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder}
+        placeholderTextColor={MUTED} style={styles.input} keyboardType={keyboardType} />
+    </View>;
+  }
+
+  function MedicineForm() {
+    if (!showMedicineForm) return null;
+    return <View style={styles.formCard}>
+      <View style={styles.formHeader}>
+        <Text style={styles.cardTitle}>{editingId ? 'Editar medicamento' : 'Cadastrar medicamento'}</Text>
+        <Pressable accessibilityLabel="Fechar formulário" onPress={() => { setShowMedicineForm(false); setEditingId(null); }} style={styles.iconButton}><X size={20} color={DARK} /></Pressable>
+      </View>
+      <Pressable onPress={openAssistant} style={styles.assistantBanner}>
+        <Sparkles size={19} color={BLUE} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.assistantBannerTitle}>Quer ajuda com a receita?</Text>
+          <Text style={styles.smallDescription}>Converse com o assistente ou grave um áudio.</Text>
+        </View>
+        <Text style={styles.assistantBannerArrow}>›</Text>
+      </Pressable>
+      {Field({label: 'Nome *', value: draft.name, onChangeText: (v: string) => updateDraft('name', v), placeholder: 'Ex.: Losartana'})}
+      {Field({label: 'Dosagem *', value: draft.dosage, onChangeText: (v: string) => updateDraft('dosage', v), placeholder: 'Ex.: 50 mg'})}
+      {Field({label: 'Instruções de uso', value: draft.instructions, onChangeText: (v: string) => updateDraft('instructions', v), placeholder: 'Ex.: Tomar com água após o café'})}
+      {Field({label: 'Primeiro horário * (HH:MM)', value: draft.firstTime, onChangeText: (v: string) => updateDraft('firstTime', v), placeholder: '08:00'})}
+      {Field({label: 'Intervalo entre doses (horas) *', value: draft.intervalHours, onChangeText: (v: string) => updateDraft('intervalHours', v), placeholder: '24', keyboardType: 'numeric'})}
+      {Field({label: 'Data de início * (AAAA-MM-DD)', value: draft.startDate, onChangeText: (v: string) => updateDraft('startDate', v), placeholder: '2026-10-15'})}
+      <View style={styles.switchRow}>
+        <View style={styles.switchText}><Text style={styles.fieldLabel}>Uso contínuo</Text><Text style={styles.smallDescription}>Desative para informar uma data de término.</Text></View>
+        <Switch value={draft.continuous} onValueChange={(v) => updateDraft('continuous', v)} trackColor={{ false: BORDER, true: '#A8DDE9' }} thumbColor={draft.continuous ? BLUE : '#F5F5F5'} />
+      </View>
+      {!draft.continuous && Field({label: 'Data de término * (AAAA-MM-DD)', value: draft.endDate, onChangeText: (v: string) => updateDraft('endDate', v), placeholder: '2026-11-15'})}
+      <View style={styles.subsectionTitle}><Package size={18} color={BLUE} /><Text style={styles.cardTitle}>Estoque</Text></View>
+      {Field({label: 'Quantidade atual (opcional)', value: draft.stockQuantity, onChangeText: (v: string) => updateDraft('stockQuantity', v), placeholder: 'Ex.: 30', keyboardType: 'decimal-pad'})}
+      <Text style={styles.fieldLabel}>Unidade do estoque</Text>
+      <View style={styles.unitOptions}>
+        {['unidades', 'comprimidos', 'cápsulas', 'caixas', 'ml', 'gotas'].map((unit) =>
+          <Pressable key={unit} onPress={() => updateDraft('stockUnit', unit)} style={[styles.unitChip, draft.stockUnit === unit && styles.unitChipActive]}>
+            <Text style={[styles.unitChipText, draft.stockUnit === unit && styles.unitChipTextActive]}>{unit}</Text>
+          </Pressable>
+        )}
+      </View>
+      {Field({label: 'Unidades por dose', value: draft.unitsPerDose, onChangeText: (v: string) => updateDraft('unitsPerDose', v), placeholder: '1', keyboardType: 'decimal-pad'})}
+      <Text style={styles.smallDescription}>Os dados ainda são demonstrativos e não são enviados para uma API.</Text>
+      <View style={styles.formActions}>
+        <Pressable onPress={() => { setShowMedicineForm(false); setEditingId(null); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Cancelar</Text></Pressable>
+        <Pressable onPress={saveMedicine} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{editingId ? 'Salvar alterações' : 'Salvar medicamento'}</Text></Pressable>
+      </View>
+    </View>;
+  }
+
+  function HomeScreen() {
+    return <>
+      <View style={styles.pageHeading}><Text style={styles.pageKicker}>Acompanhamento AICare</Text><Text style={styles.pageTitle}>Hoje · Maria</Text></View>
+      {medicines.length === 0 ? EmptyMedicines() : <View style={styles.summaryCard}><Text style={styles.summaryTitle}>{medicines.length} {medicines.length === 1 ? 'medicamento cadastrado' : 'medicamentos cadastrados'}</Text><Text style={styles.summaryDescription}>Acompanhe os horários e os registros de hoje.</Text></View>}
+      <View style={styles.photoCard}>
+        <View style={styles.rowTitle}><Camera size={21} color={BLUE} strokeWidth={2} /><View style={styles.photoText}><Text style={styles.cardTitle}>Registro de hoje</Text><Text style={styles.smallDescription}>Adicione uma foto de Maria ao diário compartilhado.</Text></View></View>
+        <Pressable onPress={() => Alert.alert('Registro de hoje', 'A seleção de fotos será implementada em uma próxima etapa.')} style={styles.photoButton}><View style={styles.photoButtonContent}><Camera size={18} color="#FFFFFF" strokeWidth={2.3} /><Text style={styles.photoButtonText}>Registrar foto</Text></View></Pressable>
+      </View>
+      <View style={styles.sectionHeading}><Text style={styles.sectionTitle}>Medicamentos de hoje</Text><Pressable onPress={() => setActiveTab('Medicamentos')}><Text style={styles.textLink}>Ver todos →</Text></Pressable></View>
+      {medicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>Ainda não há horários para hoje.</Text></View> : medicines.map((medicine) => MedicineCard({ medicine }))}
+      {NewMedicineCard()}{MedicineForm()}
+    </>;
+  }
+
+  function MedicinesScreen() {
+    return <>
+      <View style={styles.pageHeading}><Text style={styles.pageKicker}>Acompanhamento AICare</Text><Text style={styles.pageTitle}>Medicamentos</Text><Text style={styles.smallDescription}>Cadastre e acompanhe os medicamentos de Maria.</Text></View>
+      {!showMedicineForm && <Pressable onPress={openNewMedicineForm} style={styles.primaryButton}><Text style={styles.primaryButtonText}>+ Novo medicamento</Text></Pressable>}
+      {!showMedicineForm && <Pressable onPress={openAssistant} style={styles.assistantEntry}><Sparkles size={19} color={BLUE} /><View style={{ flex: 1 }}><Text style={styles.assistantBannerTitle}>Assistente de medicamentos</Text><Text style={styles.smallDescription}>Descreva a receita por texto ou áudio.</Text></View><Text style={styles.assistantBannerArrow}>›</Text></Pressable>}
+      {MedicineForm()}
+      <View style={styles.searchWrap}><Search size={18} color={MUTED} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar medicamento..." placeholderTextColor={MUTED} style={styles.searchInput} /></View>
+      {filteredMedicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>{medicines.length === 0 ? 'Ainda não há medicamentos cadastrados.' : 'Nenhum medicamento encontrado.'}</Text></View> : filteredMedicines.map((medicine) => MedicineCard({ medicine }))}
+    </>;
+  }
+
+  function DiaryScreen() {
+    return <>
+      <View style={styles.pageHeading}><Text style={styles.pageKicker}>Acompanhamento AICare</Text><Text style={styles.pageTitle}>Diário · Maria</Text></View>
+      <View style={styles.photoCard}><View style={styles.rowTitle}><Camera size={21} color={BLUE} /><View style={styles.photoText}><Text style={styles.cardTitle}>Registro de hoje</Text><Text style={styles.smallDescription}>Adicione uma foto de Maria ao diário compartilhado.</Text></View></View>
+        <Pressable onPress={() => Alert.alert('Diário', 'A seleção e o armazenamento de fotos serão implementados na próxima etapa.')} style={styles.photoButton}><View style={styles.photoButtonContent}><Camera size={18} color="#FFFFFF" /><Text style={styles.photoButtonText}>Registrar foto</Text></View></Pressable>
+      </View>
+      <View style={styles.noScheduleCard}><Text style={styles.bodyText}>Nenhuma foto registrada ainda.</Text></View>
+    </>;
+  }
+
+  function PeopleScreen() {
+    return <>
+      <View style={styles.pageHeading}><Text style={styles.pageKicker}>Acompanhamento AICare</Text><Text style={styles.pageTitle}>Pessoas</Text></View>
+      <View style={styles.personCard}><View style={styles.personAvatar}><Text style={styles.personAvatarText}>M</Text></View><View style={styles.medicineInfo}><Text style={styles.cardTitle}>Maria</Text><Text style={styles.smallDescription}>Paciente demonstrativa</Text></View></View>
+      <View style={styles.noScheduleCard}><Text style={styles.emptyTitle}>Familiares e cuidadores</Text><Text style={styles.emptyDescription}>O compartilhamento e os convites serão implementados na próxima etapa.</Text></View>
+    </>;
+  }
+    if (showAssistant) {
   return (
     <View style={styles.app}>
-      <StatusBar backgroundColor="#FFFFFF" barStyle="dark-content" translucent={false} />
-
-      <View style={[styles.topbar, !desktop && styles.topbarMobile, compact && styles.topbarCompact]}>
-        <View style={styles.brand}>
-          <View style={[styles.logo, !desktop && styles.logoMobile]}>
-            <Text style={[styles.logoText, !desktop && styles.logoTextMobile]}>A</Text>
-          </View>
-          <View>
-            <Text style={[styles.brandName, !desktop && styles.brandNameMobile]}>AICare</Text>
-            <Text style={[styles.brandSub, !desktop && styles.brandSubMobile]}>Cuidado conectado</Text>
-          </View>
-        </View>
-
-        {desktop && (
-          <View style={styles.profile}>
-            <Text style={styles.profileName}>Cuidador</Text>
-            <Text style={styles.brandSub}>Conta demonstrativa</Text>
-          </View>
-        )}
-      </View>
-
-      <View style={[styles.body, !desktop && styles.bodyMobile]}>
-        {desktop && (
-          <View style={styles.sidebar}>
-            <Text style={styles.sectionLabel}>MENU PRINCIPAL</Text>
-            {menu.map(item => (
-              <Pressable
-                key={item.label}
-                accessibilityRole="button"
-                onPress={() => {
-                  setActive(item.label);
-                  setSearch('');
-                }}
-                style={[
-                  styles.menuItem,
-                  active === item.label && styles.menuActive,
-                ]}
-              >
-                <Text style={[
-                  styles.menuIcon,
-                  active === item.label && styles.menuTextActive,
-                ]}>
-                  {item.icon}
-                </Text>
-                <Text style={[
-                  styles.menuText,
-                  active === item.label && styles.menuTextActive,
-                ]}>
-                  {item.label}
-                </Text>
-              </Pressable>
-            ))}
-            <View style={styles.sidebarBottom}>
-              <Text style={styles.cardTitle}>Precisa de ajuda?</Text>
-              <Text style={styles.muted}>
-                Estamos aqui para apoiar você nos cuidados.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        <ScrollView
-          style={styles.main}
-          contentContainerStyle={[styles.content, !desktop && styles.contentMobile, compact && styles.contentCompact]}
-          keyboardShouldPersistTaps="handled"
-        >
-          {!desktop && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={[styles.mobileMenu, compact && styles.mobileMenuCompact]}
-            >
-              {menu.map(item => (
-                <Pressable
-                  key={item.label}
-                  accessibilityRole="button"
-                  onPress={() => {
-                    setActive(item.label);
-                    setSearch('');
-                  }}
-                  style={[
-                    styles.mobileMenuItem,
-                    active === item.label && styles.mobileMenuActive,
-                  ]}
-                >
-                  <Text style={[
-                    styles.mobileMenuText,
-                    active === item.label && styles.menuTextActive,
-                  ]}>
-                    {item.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          )}
-
-          <ScreenContent />
-          <Text style={styles.disclaimer}>AICare · TCC · Dados fictícios</Text>
-        </ScrollView>
-      </View>
+      <StatusBar backgroundColor={BG} barStyle="dark-content" translucent={false} />
+      <MedicationAssistantScreen
+        onBack={() => setShowAssistant(false)}
+        onConfirmMedication={confirmAssistantMedication}
+      />
     </View>
   );
 }
+  const ActiveScreen = activeTab === 'Medicamentos' ? MedicinesScreen : activeTab === 'Diário' ? DiaryScreen : activeTab === 'Pessoas' ? PeopleScreen : HomeScreen;
+
+  return <View style={styles.app}>
+    <StatusBar backgroundColor={BG} barStyle="dark-content" translucent={false} />
+    {Header()}
+    <ScrollView style={styles.mainScroll} contentContainerStyle={[styles.content, compact && styles.contentCompact]} keyboardShouldPersistTaps="handled">
+      {ActiveScreen()}
+      <Text style={styles.disclaimer}>AICare · TCC · Dados demonstrativos</Text>
+    </ScrollView>
+    <View style={styles.bottomNav}>
+      {tabs.map((tab) => {
+        const selected = activeTab === tab.label;
+        return <Pressable key={tab.label} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setShowAssistant(false); setActiveTab(tab.label); setSearch(''); }} style={[styles.bottomNavItem, selected && styles.bottomNavItemActive]}>
+          {tab.label === 'Início' && <Clock size={25} color={selected ? BLUE : '#526F7B'} strokeWidth={2} />}
+          {tab.label === 'Diário' && <CalendarDays size={25} color={selected ? BLUE : '#526F7B'} strokeWidth={2} />}
+          {tab.label === 'Medicamentos' && <Pill size={25} color={selected ? BLUE : '#526F7B'} strokeWidth={2} />}
+          {tab.label === 'Pessoas' && <UsersRound size={25} color={selected ? BLUE : '#526F7B'} strokeWidth={2} />}
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={[styles.bottomNavLabel, selected && styles.bottomNavLabelActive]}>{tab.label}</Text>
+        </Pressable>;
+      })}
+    </View>
+  </View>;
+}
 
 const styles = StyleSheet.create({
-  app: { flex: 1, backgroundColor: BG, paddingTop: Platform.OS === 'ios' ? 48 : 0 },
-  topbar: {
-    minHeight: 76,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EEF1',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  topbarMobile: {
-    minHeight: 0,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 7 : 8,
-  },
-  topbarCompact: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + 5 : 6,
-  },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  logoMobile: { width: 34, height: 34, borderRadius: 10 },
-  logoTextMobile: { fontSize: 19 },
-  brandNameMobile: { fontSize: 17 },
-  brandSubMobile: { fontSize: 10, marginTop: 1 },
-  logo: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    backgroundColor: BLUE,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoText: { color: DARK, fontWeight: '800', fontSize: 24 },
-  brandName: { color: DARK, fontWeight: '800', fontSize: 20 },
-  brandSub: { color: MUTED, fontSize: 11, marginTop: 3 },
-  profile: { alignItems: 'flex-end' },
-  profileName: { color: DARK, fontSize: 13, fontWeight: '700' },
-  body: { flex: 1, flexDirection: 'row', minHeight: 0 },
-  bodyMobile: { flexDirection: 'column' },
-  sidebar: {
-    width: 238,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: 1,
-    borderRightColor: '#E8EEF1',
-    paddingHorizontal: 17,
-    paddingTop: 30,
-  },
-  sectionLabel: {
-    color: MUTED,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginHorizontal: 12,
-    marginBottom: 16,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 13,
-    paddingVertical: 13,
-    paddingHorizontal: 12,
-    borderRadius: 11,
-    marginBottom: 5,
-  },
-  menuActive: { backgroundColor: '#E8F6FA' },
-  menuIcon: { color: MUTED, fontSize: 19, width: 22, textAlign: 'center' },
-  menuText: { color: '#566C7A', fontSize: 13 },
-  menuTextActive: { color: '#176780', fontWeight: '700' },
-  sidebarBottom: {
-    marginTop: 'auto',
-    marginBottom: 24,
-    padding: 15,
-    backgroundColor: '#F0F9FB',
-    borderRadius: 12,
-  },
-  main: { flex: 1, minWidth: 0 },
-  content: {
-    width: '100%',
-    maxWidth: 1160,
-    alignSelf: 'center',
-    padding: 20,
-    paddingBottom: 40,
-  },
-  contentMobile: {
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 24,
-  },
-  contentCompact: {
-    paddingHorizontal: 11,
-    paddingTop: 7,
-  },
-  mobileMenu: { marginBottom: 16, flexGrow: 0 },
-  mobileMenuCompact: { marginBottom: 14 },
-  mobileMenuItem: {
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    marginRight: 7,
-    backgroundColor: '#FFFFFF',
-  },
-  mobileMenuItemCompact: {
-    paddingVertical: 8,
-    paddingHorizontal: 11,
-    borderRadius: 9,
-    marginRight: 6,
-  },
-  mobileMenuActive: { backgroundColor: '#DDF2F8' },
-  mobileMenuText: { color: MUTED, fontSize: 12, fontWeight: '600' },
-  mobileMenuTextCompact: { fontSize: 11 },
-  greeting: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 16,
-  },
-  greetingText: { flex: 1, minWidth: 0 },
-  eyebrow: {
-    color: '#688594',
-    fontSize: 10,
-    letterSpacing: 1,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  heading: {
-    color: DARK,
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  subtitle: { color: MUTED, fontSize: 12, lineHeight: 18, marginBottom: 12 },
-  dateBadge: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E5ECEF',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  dateText: { color: DARK, fontSize: 12, fontWeight: '600' },
-  patientCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: '#E6EEF1',
-    padding: 13,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 11,
-    marginBottom: 14,
-  },
-  patientAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: '#DDF2F8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  patientAvatarText: { fontSize: 18, color: '#34778D', fontWeight: '800' },
-  patientInfo: { flex: 1, minWidth: 0 },
-  patientName: { color: DARK, fontSize: 18, fontWeight: '800', marginBottom: 4 },
-  patientHeart: { color: '#65B8CE', fontSize: 25 },
-  stats: { flexDirection: 'row', gap: 9, marginBottom: 18, flexWrap: 'wrap' },
-  statCard: {
-    flex: 1,
-    minWidth: 135,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E6EEF1',
-    padding: 12,
-    marginBottom: 4,
-  },
-  statTitle: { color: MUTED, fontSize: 11 },
-  statValue: { color: DARK, fontSize: 23, fontWeight: '800', marginTop: 7 },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 15,
-  },
-  cardTitle: { color: DARK, fontSize: 15, fontWeight: '800', marginBottom: 5 },
-  linkButton: { paddingVertical: 8, paddingHorizontal: 10 },
-  linkText: { color: '#287C96', fontSize: 12, fontWeight: '700' },
-  list: { gap: 10, marginBottom: 20 },
-  input: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E6EEF1',
-    borderRadius: 11,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: DARK,
-    marginBottom: 4,
-  },
-  medicineCard: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E6EEF1',
-    borderRadius: 13,
-    padding: 11,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 2,
-    flexWrap: 'wrap',
-  },
-  medicineInfo: { flex: 1, minWidth: 90 },
-  medicineName: { color: DARK, fontSize: 14, fontWeight: '700', marginBottom: 5 },
-  muted: { color: MUTED, fontSize: 12, lineHeight: 18 },
-  statusArea: { alignItems: 'flex-end', gap: 7 },
-  status: {
-    color: DARK,
-    backgroundColor: '#FFF0D6',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 8,
-    fontSize: 10,
-    overflow: 'hidden',
-  },
-  done: { backgroundColor: '#DDF4E8' },
-  smallButton: {
-    backgroundColor: '#E8F6FA',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  smallButtonText: { color: '#176780', fontSize: 11, fontWeight: '700' },
-  time: { color: '#287C96', fontSize: 13, fontWeight: '800', marginRight: 8 },
-  calendarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8EEF1',
-    gap: 8,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E6EEF1',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 16,
-  },
-  familyAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#DDF2F8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  avatarText: { color: DARK, fontWeight: '700' },
-  separator: {
-    height: 1,
-    backgroundColor: '#E8EEF1',
-    marginVertical: 16,
-  },
-  footerNote: {
-    flexDirection: 'row',
-    gap: 13,
-    alignItems: 'center',
-    backgroundColor: '#E8F6FA',
-    padding: 18,
-    borderRadius: 13,
-    marginTop: 12,
-  },
-  disclaimer: {
-    color: '#8B9AA3',
-    fontSize: 10,
-    textAlign: 'center',
-    marginTop: 20,
-  },
+  app: { flex: 1, backgroundColor: BG, paddingTop: Platform.OS === 'ios' ? 44 : 0 },
+  header: { minHeight: 87, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: BG, borderTopWidth: 1, borderTopColor: '#D9E6EB', borderBottomWidth: 1, borderBottomColor: BORDER, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 },
+  notificationIcon: { width: 44, height: 44, borderRadius: 10, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' },
+  headerTitleWrap: { flex: 1, minWidth: 0 },
+  headerEyebrow: { color: DARK, fontSize: 10, letterSpacing: 0.2, fontWeight: '500' },
+  headerTitle: { color: DARK, fontSize: 16, fontWeight: '800', marginTop: 2 },
+  userPill: { backgroundColor: BLUE, borderRadius: 10, paddingLeft: 13, paddingRight: 5, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  userName: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  userAvatar: { width: 31, height: 31, borderRadius: 16, backgroundColor: '#E6F5F9', alignItems: 'center', justifyContent: 'center' },
+  userAvatarText: { color: BLUE, fontSize: 13, fontWeight: '800' },
+  mainScroll: { flex: 1 },
+  content: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 22, gap: 24 },
+  contentCompact: { paddingHorizontal: 18, paddingTop: 20, gap: 20 },
+  pageHeading: { gap: 4 },
+  pageKicker: { color: DARK, fontSize: 12 },
+  pageTitle: { color: '#0A293A', fontSize: 27, fontWeight: '800', letterSpacing: -0.5 },
+  summaryCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 17, gap: 8 },
+  summaryTitle: { color: DARK, fontSize: 17, fontWeight: '800' },
+  summaryDescription: { color: MUTED, fontSize: 15, lineHeight: 22 },
+  emptyCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 17, gap: 8 },
+  emptyTitle: { color: '#152F3E', fontSize: 16, fontWeight: '800' },
+  emptyDescription: { color: MUTED, fontSize: 15, lineHeight: 22 },
+  photoCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 17, gap: 17 },
+  rowTitle: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  photoText: { flex: 1, minWidth: 0, gap: 3 },
+  cardTitle: { color: '#102F40', fontSize: 16, fontWeight: '800' },
+  smallDescription: { color: MUTED, fontSize: 12, lineHeight: 19 },
+  photoButton: { minHeight: 48, borderRadius: 8, backgroundColor: BLUE, alignItems: 'center', justifyContent: 'center' },
+  photoButtonContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  photoButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: -12 },
+  sectionTitle: { color: DARK, fontSize: 17, fontWeight: '800' },
+  textLink: { color: BLUE, fontSize: 12, fontWeight: '800' },
+  noScheduleCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 17 },
+  bodyText: { color: MUTED, fontSize: 14, lineHeight: 21 },
+  newMedicineCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 9, paddingLeft: 17, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  newMedicineText: { flex: 1, minWidth: 0, gap: 5, paddingVertical: 7 },
+  addButton: { width: 48, height: 48, borderRadius: 8, backgroundColor: PALE_BLUE, alignItems: 'center', justifyContent: 'center' },
+  formCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 16, gap: 12 },
+  formHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  field: { gap: 6 },
+  fieldLabel: { color: DARK, fontSize: 12, fontWeight: '700' },
+  input: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, paddingHorizontal: 13, paddingVertical: 12, color: DARK, fontSize: 14 },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 9, borderColor: BORDER, borderWidth: 1, borderRadius: 8, backgroundColor: '#FFFFFF', paddingLeft: 13 },
+  searchInput: { flex: 1, paddingHorizontal: 0, paddingVertical: 12, color: DARK, fontSize: 14 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 4 },
+  switchText: { flex: 1, gap: 3 },
+  subsectionTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  unitOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  unitChip: { borderWidth: 1, borderColor: BORDER, borderRadius: 18, paddingHorizontal: 11, paddingVertical: 7, backgroundColor: '#FFFFFF' },
+  unitChipActive: { borderColor: BLUE, backgroundColor: PALE_BLUE },
+  unitChipText: { color: MUTED, fontSize: 12 },
+  unitChipTextActive: { color: DARK, fontWeight: '700' },
+  formActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
+  primaryButton: { backgroundColor: BLUE, borderRadius: 8, paddingVertical: 13, paddingHorizontal: 15, alignItems: 'center', justifyContent: 'center' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  secondaryButton: { backgroundColor: PALE_BLUE, borderRadius: 8, paddingVertical: 13, paddingHorizontal: 15, alignItems: 'center' },
+  secondaryButtonText: { color: DARK, fontSize: 13, fontWeight: '700' },
+  disclaimer: { color: '#8B9AA3', fontSize: 10, textAlign: 'center', marginTop: 4 },
+  medicineCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 13, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  medicineInfo: { flex: 1, minWidth: 0, gap: 4 },
+  medicineName: { color: DARK, fontSize: 15, fontWeight: '800' },
+  medicineActions: { alignItems: 'flex-end', gap: 7 },
+  statusPill: { color: DARK, backgroundColor: '#FFF0D6', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, fontSize: 10, overflow: 'hidden' },
+  statusDone: { backgroundColor: '#DDF4E8' },
+  primarySmallButton: { backgroundColor: PALE_BLUE, paddingVertical: 9, paddingHorizontal: 11, borderRadius: 8 },
+  primarySmallButtonText: { color: '#176780', fontSize: 11, fontWeight: '800' },
+  iconActions: { flexDirection: 'row', gap: 5 },
+  iconButton: { padding: 7, borderRadius: 7, backgroundColor: PALE_BLUE },
+  personCard: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  personAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: PALE_BLUE, alignItems: 'center', justifyContent: 'center' },
+  personAvatarText: { color: BLUE, fontSize: 15, fontWeight: '800' },
+  bottomNav: { backgroundColor: '#FFFFFF', borderColor: BORDER, borderWidth: 1, borderRadius: 8, marginHorizontal: 24, marginBottom: Platform.OS === 'ios' ? 16 : 10, padding: 8, flexDirection: 'row', alignItems: 'stretch', gap: 4 },
+  bottomNavItem: { flex: 1, minWidth: 0, minHeight: 66, borderRadius: 7, alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 2 },
+  bottomNavItemActive: { backgroundColor: PALE_BLUE },
+  bottomNavLabel: { color: DARK, fontSize: 11, textAlign: 'center', flexShrink: 0, includeFontPadding: false },
+  bottomNavLabelActive: { color: BLUE, fontWeight: '700' },
+  assistantLink: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingVertical: 5 },
+  assistantLinkText: { color: BLUE, fontSize: 12, fontWeight: '800' },
+  assistantBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#C7E7EF', backgroundColor: PALE_BLUE, marginBottom: 2 },
+  assistantEntry: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#C7E7EF', backgroundColor: '#FFFFFF' },
+  assistantBannerTitle: { color: DARK, fontSize: 13, fontWeight: '800' },
+  assistantBannerArrow: { color: BLUE, fontSize: 25, fontWeight: '400', paddingHorizontal: 3 },
 });
