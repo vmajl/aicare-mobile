@@ -90,67 +90,155 @@ export default function App() {
     setShowAssistant(false);
     setActiveTab('Medicamentos');
   }
-
-  function saveMedicine() {
-    const { name, dosage, firstTime, intervalHours, startDate, endDate, stockQuantity, unitsPerDose, continuous } = draft;
-    if (!name.trim() || !dosage.trim() || !firstTime.trim() || !startDate.trim()) {
-      Alert.alert('Campos obrigatórios', 'Informe nome, dosagem, primeiro horário e data de início.');
-      return;
-    }
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
-      Alert.alert('Horário inválido', 'Use o formato HH:MM, por exemplo 08:00.');
-      return;
-    }
-    const interval = Number(intervalHours);
-    if (!Number.isFinite(interval) || interval < 1 || interval > 168) {
-      Alert.alert('Intervalo inválido', 'Informe um intervalo entre 1 e 168 horas.');
-      return;
-    }
-    if (!continuous && (!endDate.trim() || endDate < startDate)) {
-      Alert.alert('Data de término', 'Informe uma data final igual ou posterior à data de início.');
-      return;
-    }
-    if (stockQuantity.trim() && (!Number.isFinite(Number(stockQuantity)) || Number(stockQuantity) < 0)) {
-      Alert.alert('Estoque inválido', 'A quantidade em estoque deve ser zero ou maior.');
-      return;
-    }
-    if (!Number.isFinite(Number(unitsPerDose)) || Number(unitsPerDose) <= 0) {
-      Alert.alert('Quantidade por dose inválida', 'Informe um valor maior que zero.');
-      return;
-    }
-    const existing = editingId ? medicines.find((item) => item.id === editingId) : undefined;
-    const saved: Medicine = {
-      id: editingId ?? `${Date.now()}`,
-      name: name.trim(), dosage: dosage.trim(), instructions: draft.instructions.trim(),
-      firstTime: firstTime.trim(), intervalHours: String(interval),
-      continuous, startDate, endDate: continuous ? '' : endDate,
-      stockQuantity: stockQuantity.trim(), stockUnit: draft.stockUnit,
-      unitsPerDose: String(Number(unitsPerDose)), active: existing?.active ?? true,
-      administered: existing?.administered ?? false,
-    };
-    setMedicines((current) => editingId
-      ? current.map((item) => item.id === editingId ? saved : item)
-      : [...current, saved]
-    );
-    setDraft(emptyMedicine());
-    setEditingId(null);
-    setShowMedicineForm(false);
-    setSearch('');
-    Alert.alert('Medicamento salvo', 'O cadastro foi salvo nesta sessão do aplicativo.');
+  
+function showAppAlert(title: string, message: string) {
+  if (Platform.OS === 'web') {
+    window.alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
   }
+}
+
+function saveMedicine() {
+  const {
+    name,
+    dosage,
+    firstTime,
+    intervalHours,
+    startDate,
+    endDate,
+    stockQuantity,
+    unitsPerDose,
+    continuous,
+  } = draft;
+
+  if (!name.trim() || !dosage.trim() || !firstTime.trim() || !startDate.trim()) {
+    showAppAlert(
+      'Campos obrigatórios',
+      'Informe nome, dosagem, primeiro horário e data de início.'
+    );
+    return;
+  }
+  
+if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
+  showAppAlert(
+    'Horário inválido',
+    'Informe um horário válido no formato HH:MM, por exemplo 08:00.'
+  );
+  return;
+}
+
+  const interval = Number(intervalHours);
+
+  if (!Number.isFinite(interval) || interval < 1 || interval > 24) {
+    showAppAlert(
+      'Intervalo inválido',
+      'Informe um intervalo entre 1 e 24 horas.'
+    );
+    return;
+  }
+  if (!continuous && (!endDate.trim() || endDate < startDate)) {
+    showAppAlert(
+      'Data de término',
+      'Informe uma data final igual ou posterior à data de início.'
+    );
+    return;
+  }
+
+  if (
+    stockQuantity.trim() &&
+    (!Number.isFinite(Number(stockQuantity)) || Number(stockQuantity) < 0)
+  ) {
+    showAppAlert(
+      'Estoque inválido',
+      'A quantidade em estoque deve ser zero ou maior.'
+    );
+    return;
+  }
+
+  if (!Number.isFinite(Number(unitsPerDose)) || Number(unitsPerDose) <= 0) {
+    showAppAlert(
+      'Quantidade por dose inválida',
+      'Informe um valor maior que zero.'
+    );
+    return;
+  }
+
+  const existing = editingId
+    ? medicines.find((item) => item.id === editingId)
+    : undefined;
+
+  const saved: Medicine = {
+    id: editingId ?? `${Date.now()}`,
+    name: name.trim(),
+    dosage: dosage.trim(),
+    instructions: draft.instructions.trim(),
+    firstTime: firstTime.trim(),
+    intervalHours: String(interval),
+    continuous,
+    startDate,
+    endDate: continuous ? '' : endDate,
+    stockQuantity: stockQuantity.trim(),
+    stockUnit: draft.stockUnit,
+    unitsPerDose: String(Number(unitsPerDose)),
+    active: existing?.active ?? true,
+    administered: existing?.administered ?? false,
+  };
+
+  setMedicines((current) =>
+    editingId
+      ? current.map((item) => (item.id === editingId ? saved : item))
+      : [...current, saved]
+  );
+
+  setDraft(emptyMedicine());
+  setEditingId(null);
+  setShowMedicineForm(false);
+  setSearch('');
+
+  showAppAlert(
+    'Medicamento salvo',
+    'O cadastro foi salvo nesta sessão do aplicativo.'
+  );
+}
+
 
   function deleteMedicine(medicine: Medicine) {
-    Alert.alert('Excluir medicamento', `Deseja excluir ${medicine.name}?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Excluir', style: 'destructive', onPress: () => {
-        setMedicines((current) => current.filter((item) => item.id !== medicine.id));
-      }},
-    ]);
+  const removeMedicine = () => {
+    setMedicines((current) =>
+      current.filter((item) => item.id !== medicine.id)
+    );
+  };
+  if (Platform.OS === 'web') {
+    const confirmed = window.confirm(
+      `Deseja excluir o medicamento ${medicine.name}?`
+    );
+
+    if (confirmed) {
+      removeMedicine();
+    }
+
+    return;
   }
 
-  function toggleMedicine(id: string) {
+  Alert.alert(
+    'Excluir medicamento',
+    `Deseja excluir ${medicine.name}?`,
+    [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Excluir',
+        style: 'destructive',
+        onPress: removeMedicine,
+      },
+    ]
+  );
+}
+
+
+  function toggleMedicine(medicineId: string) {
     setMedicines((current) => current.map((medicine) =>
-      medicine.id === id ? { ...medicine, administered: !medicine.administered } : medicine
+      medicine.id === medicineId ? { ...medicine, administered: !medicine.administered } : medicine
     ));
   }
 
@@ -215,7 +303,10 @@ export default function App() {
         </Pressable>
         <View style={styles.iconActions}>
           <Pressable accessibilityLabel={`Editar ${medicine.name}`} onPress={() => openEditMedicine(medicine)} style={styles.iconButton}><Pencil size={17} color={BLUE} /></Pressable>
-          <Pressable accessibilityLabel={`Excluir ${medicine.name}`} onPress={() => deleteMedicine(medicine)} style={styles.iconButton}><Trash2 size={17} color="#B54A4A" /></Pressable>
+          <Pressable accessibilityRole="button"accessibilityLabel={`Excluir ${medicine.name}`} onPress={() => { console.log('Clique em excluir:', medicine.name);deleteMedicine(medicine);}}
+           style={styles.iconButton}
+           ><Trash2 size={17} color="#B54A4A" />
+          </Pressable>
         </View>
       </View>
     </View>;
@@ -273,13 +364,13 @@ export default function App() {
       {Field({label: 'Dosagem *', value: draft.dosage, onChangeText: (v: string) => updateDraft('dosage', v), placeholder: 'Ex.: 50 mg'})}
       {Field({label: 'Instruções de uso', value: draft.instructions, onChangeText: (v: string) => updateDraft('instructions', v), placeholder: 'Ex.: Tomar com água após o café'})}
       {Field({label: 'Primeiro horário * (HH:MM)', value: draft.firstTime, onChangeText: (v: string) => updateDraft('firstTime', v), placeholder: '08:00'})}
-      {Field({label: 'Intervalo entre doses (horas) *', value: draft.intervalHours, onChangeText: (v: string) => updateDraft('intervalHours', v), placeholder: '24', keyboardType: 'numeric'})}
-      {Field({label: 'Data de início * (AAAA-MM-DD)', value: draft.startDate, onChangeText: (v: string) => updateDraft('startDate', v), placeholder: '2026-10-15'})}
+      {Field({label: 'Intervalo entre doses (horas) *', value: draft.intervalHours, onChangeText: (v: string) => updateDraft('intervalHours', v), placeholder: '12', keyboardType: 'numeric'})}
+      {Field({label: 'Data de início * (DD/MM/AAAA)', value: draft.startDate, onChangeText: (v: string) => updateDraft('startDate', v), placeholder: '15/10/2026'})}
       <View style={styles.switchRow}>
         <View style={styles.switchText}><Text style={styles.fieldLabel}>Uso contínuo</Text><Text style={styles.smallDescription}>Desative para informar uma data de término.</Text></View>
         <Switch value={draft.continuous} onValueChange={(v) => updateDraft('continuous', v)} trackColor={{ false: BORDER, true: '#A8DDE9' }} thumbColor={draft.continuous ? BLUE : '#F5F5F5'} />
       </View>
-      {!draft.continuous && Field({label: 'Data de término * (AAAA-MM-DD)', value: draft.endDate, onChangeText: (v: string) => updateDraft('endDate', v), placeholder: '2026-11-15'})}
+      {!draft.continuous && Field({label: 'Data de término * (DD/MM/AAAA)', value: draft.endDate, onChangeText: (v: string) => updateDraft('endDate', v), placeholder: '15/11/2026'})}
       <View style={styles.subsectionTitle}><Package size={18} color={BLUE} /><Text style={styles.cardTitle}>Estoque</Text></View>
       {Field({label: 'Quantidade atual (opcional)', value: draft.stockQuantity, onChangeText: (v: string) => updateDraft('stockQuantity', v), placeholder: 'Ex.: 30', keyboardType: 'decimal-pad'})}
       <Text style={styles.fieldLabel}>Unidade do estoque</Text>
@@ -308,7 +399,7 @@ export default function App() {
         <Pressable onPress={() => Alert.alert('Registro de hoje', 'A seleção de fotos será implementada em uma próxima etapa.')} style={styles.photoButton}><View style={styles.photoButtonContent}><Camera size={18} color="#FFFFFF" strokeWidth={2.3} /><Text style={styles.photoButtonText}>Registrar foto</Text></View></Pressable>
       </View>
       <View style={styles.sectionHeading}><Text style={styles.sectionTitle}>Medicamentos de hoje</Text><Pressable onPress={() => setActiveTab('Medicamentos')}><Text style={styles.textLink}>Ver todos →</Text></Pressable></View>
-      {medicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>Ainda não há horários para hoje.</Text></View> : medicines.map((medicine) => MedicineCard({ medicine }))}
+      {medicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>Ainda não há horários para hoje.</Text></View> : medicines.map((medicine) => (<MedicineCard key={medicine.id} medicine={medicine} />))}
       {NewMedicineCard()}{MedicineForm()}
     </>;
   }
@@ -320,7 +411,7 @@ export default function App() {
       {!showMedicineForm && <Pressable onPress={openAssistant} style={styles.assistantEntry}><Sparkles size={19} color={BLUE} /><View style={{ flex: 1 }}><Text style={styles.assistantBannerTitle}>Assistente de medicamentos</Text><Text style={styles.smallDescription}>Descreva a receita por texto ou áudio.</Text></View><Text style={styles.assistantBannerArrow}>›</Text></Pressable>}
       {MedicineForm()}
       <View style={styles.searchWrap}><Search size={18} color={MUTED} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar medicamento..." placeholderTextColor={MUTED} style={styles.searchInput} /></View>
-      {filteredMedicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>{medicines.length === 0 ? 'Ainda não há medicamentos cadastrados.' : 'Nenhum medicamento encontrado.'}</Text></View> : filteredMedicines.map((medicine) => MedicineCard({ medicine }))}
+      {filteredMedicines.length === 0 ? <View style={styles.noScheduleCard}><Text style={styles.bodyText}>{medicines.length === 0 ? 'Ainda não há medicamentos cadastrados.' : 'Nenhum medicamento encontrado.'}</Text></View> : filteredMedicines.map((medicine) => (<MedicineCard key={medicine.id} medicine={medicine} />))}
     </>;
   }
 
