@@ -13,7 +13,6 @@ import {
 import {
   ArrowLeft,
   Bot,
-  Check,
   CircleStop,
   Mic,
   Send,
@@ -32,16 +31,24 @@ type Message = {
   text: string;
 };
 
-type ExtractedMedication = {
+export type AssistantMedicationDraft = Partial<{
   name: string;
-  dose: string;
-  schedule: string;
+  dosage: string;
   instructions: string;
-};
+  firstTime: string;
+  intervalHours: string;
+  continuous: boolean;
+  startDate: string;
+  endDate: string;
+  stockQuantity: string;
+  stockUnit: string;
+  unitsPerDose: string;
+  duration: string;
+}>;
 
 type Props = {
   onBack: () => void;
-  onConfirmMedication?: (medication: ExtractedMedication) => void;
+  onComplete: (draft: AssistantMedicationDraft) => void;
 };
 
 const COLORS = {
@@ -60,29 +67,40 @@ const INITIAL_MESSAGES: Message[] = [
   {
     id: 'welcome',
     role: 'assistant',
-    text: 'Oi! Sou o assistente de medicamentos do AICare. Você pode me contar o nome do remédio, a dosagem e o horário de uso. Vou organizar as informações para você revisar antes de cadastrar.',
+    text: 'Olá! Me conte o remédio: o nome, a dosagem e de quantas em quantas horas precisa tomar.',
   },
 ];
 
-const EMPTY_MEDICATION: ExtractedMedication = {
-  name: '',
-  dose: '',
-  schedule: '',
-  instructions: '',
+const STOCK_UNIT_LABELS: Record<string, string> = {
+  unidade: 'unidades',
+  unidades: 'unidades',
+  comprimido: 'comprimidos',
+  comprimidos: 'comprimidos',
+  cápsula: 'cápsulas',
+  cápsulas: 'cápsulas',
+  caixa: 'caixas',
+  caixas: 'caixas',
+  ml: 'ml',
+  gota: 'gotas',
+  gotas: 'gotas',
 };
+
+const EMPTY_MEDICATION: AssistantMedicationDraft = {};
 
 export default function MedicationAssistantScreen({
   onBack,
-  onConfirmMedication,
+  onComplete,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [draft, setDraft] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  const [showReview, setShowReview] = useState(false);
   const [medication, setMedication] =
-    useState<ExtractedMedication>(EMPTY_MEDICATION);
+    useState<AssistantMedicationDraft>(EMPTY_MEDICATION);
   const [isThinking, setIsThinking] = useState(false);
+  const [conversationStep, setConversationStep] = useState<'medication' | 'firstTime'>('medication');
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [isAdjusting, setIsAdjusting] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
@@ -103,48 +121,227 @@ export default function MedicationAssistantScreen({
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   };
 
-  const parseDemoMessage = (text: string): ExtractedMedication => {
-    // Frontend-only demonstration. The Python API will replace this parser later.
-    const lower = text.toLowerCase();
-    const doseMatch = text.match(/\b\d+(?:[.,]\d+)?\s?(?:mg|mcg|g|ml|mL| gotas?| comprimidos?| cápsulas?)\b/i);
-    const timeWords = text.match(/(?:às?\s*)?\b(?:\d{1,2}(?::\d{2})?\s?h|manhã|tarde|noite|ao deitar|em jejum|a cada \d+ horas?)\b/i);
-    const name = text
-      .replace(/^(oi|olá|cadastrar|adicionar|quero cadastrar|o remédio é)\s*/i, '')
-      .split(/[,.!?]/)[0]
+  const parseDemoMessage = (text: string): AssistantMedicationDraft => {
+    const cleaned = text.trim();
+    const intervalMatch =
+      cleaned.match(/\bde\s+(\d+(?:[.,]\d+)?)\s*h?\s+em\s+\d+(?:[.,]\d+)?\s*h?\b/i) ??
+      cleaned.match(/\ba cada\s+(\d+(?:[.,]\d+)?)\s*(?:horas?|h)\b/i) ??
+      cleaned.match(/\bintervalo(?: entre doses)?(?: de)?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*(?:horas?|h)\b/i) ??
+      cleaned.match(/\b(\d+(?:[.,]\d+)?)\s*\/\s*\d+(?:[.,]\d+)?\s*(?:horas?|h)\b/i);
+    const unitsPerDoseMatch = cleaned.match(
+      /\b(\d+(?:[.,]\d+)?)\s*(?:unidades?|comprimidos?|cápsulas?|gotas?)\s+por dose\b/i,
+    );
+    const stockSource = cleaned.replace(unitsPerDoseMatch?.[0] ?? '', '');
+    const stockMatch =
+      stockSource.match(
+        /\b(?:estoque(?: inicial)?|quantidade(?: atual)?|tenho)\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*(unidades?|comprimidos?|cápsulas?|caixas?|ml|gotas?)\b/i,
+      ) ??
+      stockSource.match(
+        /\b(\d+(?:[.,]\d+)?)\s*(unidades?|comprimidos?|cápsulas?|caixas?|ml|gotas?)\s+(?:em estoque|disponíveis?)\b/i,
+      ) ??
+      stockSource.match(/\b(\d+(?:[.,]\d+)?)\s*(unidades?|comprimidos?|cápsulas?|caixas?|gotas?)\b/i);
+    const doseSource = cleaned
+      .replace(intervalMatch?.[0] ?? '', '')
+      .replace(stockMatch?.[0] ?? '', '')
+      .replace(unitsPerDoseMatch?.[0] ?? '', '');
+    const doseMatch =
+      doseSource.match(/\b(?:dose|dosagem)\s*[:\-]?\s*(\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml|gotas?|comprimidos?|cápsulas?))/i) ??
+      doseSource.match(/\b\d+(?:[.,]\d+)?\s*(?:mg|mcg|g|ml)\b/i);
+    const intervalRemoved = cleaned.replace(intervalMatch?.[0] ?? '', '');
+    const timeMatch = intervalRemoved.match(
+      /\b(?:[01]?\d|2[0-3])(?::[0-5]\d|h(?:[0-5]\d)?)\b/i,
+    );
+    const instructionsMatch =
+      cleaned.match(/\b(?:instruções|orientações?)\s*[:\-]?\s*([^.;!?]+)/i) ??
+      cleaned.match(/\b(tomar\s+[^.;!?]+)/i);
+    const durationMatch =
+      cleaned.match(/\b(?:por|durante)\s+(\d+(?:[.,]\d+)?)\s*(dias?|semanas?|meses?)\b/i) ??
+      cleaned.match(/\bduraç(?:ão|ao)\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*(dias?|semanas?|meses?)\b/i) ??
+      cleaned.match(/\b(\d+(?:[.,]\d+)?)\s*(dias?|semanas?|meses?)\b/i);
+    const startDateMatch = cleaned.match(
+      /\b(?:início|iniciar|começar)\s*[:\-]?\s*(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/i,
+    );
+    const endDateMatch = cleaned.match(
+      /\b(?:término|fim|até)\s*[:\-]?\s*(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/i,
+    );
+    const continuousMatch = cleaned.match(/\buso cont[ií]nuo\b|\bcont[ií]nu[oa]?\b/i);
+    const duration = durationMatch
+      ? `${durationMatch[1]} ${durationMatch[2].toLowerCase()}`
+      : undefined;
+    const toFormDate = (value: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+      const [year, month, day] = value.split('-');
+      return `${day}/${month}/${year}`;
+    };
+
+    const consumed = [
+      intervalMatch?.[0],
+      stockMatch?.[0],
+      unitsPerDoseMatch?.[0],
+      doseMatch?.[0],
+      timeMatch?.[0],
+      instructionsMatch?.[0],
+      durationMatch?.[0],
+      startDateMatch?.[0],
+      endDateMatch?.[0],
+      continuousMatch?.[0],
+    ];
+    const name = cleaned
+      .replace(/^(?:oi|olá|cadastrar|adicionar|quero cadastrar|o remédio é)\s*/i, '')
+      .replace(
+        consumed.some(Boolean)
+          ? new RegExp(consumed.filter(Boolean).map((value) => value!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi')
+          : /$^/,
+        ' ',
+      )
+      .replace(/\b(?:nome|medicamento|dose|dosagem|intervalo|frequência|frequencia|primeira dose|horário|horario|estoque inicial|estoque|quantidade atual|instruções|orientações|duração|duracao|início|iniciar|término|fim)\s*[:\-]?\s*/gi, '')
+      .replace(/\b(?:às|as)\b/gi, ' ')
+      .replace(/\b(?:estoque(?: inicial)?|quantidade(?: atual)?|tenho|em estoque|disponíveis?)\b\s*[:\-]?\s*/gi, '')
+      .replace(/\b(?:de|em)\s*$/i, '')
+      .replace(/\bdata\s+de\b/gi, ' ')
+      .replace(/\buso cont[ií]nuo\b|\bcont[ií]nu[oa]?\b/gi, ' ')
+      .replace(/[,:;.!?]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
 
-    return {
-      name: name.length > 0 ? name : '',
-      dose: doseMatch?.[0]?.trim() ?? '',
-      schedule: timeWords?.[0]?.trim() ?? '',
-      instructions: '',
-    };
+    const parsed: AssistantMedicationDraft = {};
+    if (name && !/^(?:uso cont[ií]nuo|cont[ií]nu[oa]?)$/i.test(name)) parsed.name = name;
+    if (doseMatch) parsed.dosage = doseMatch[1]?.trim() ?? doseMatch[0].trim();
+    if (instructionsMatch) parsed.instructions = instructionsMatch[1]?.trim() ?? '';
+    if (timeMatch) {
+      parsed.firstTime = timeMatch[0].replace(/h/i, ':').replace(/:$/, ':00');
+    }
+    if (intervalMatch) {
+      parsed.intervalHours = String(Number(intervalMatch[1].replace(',', '.')));
+    }
+    if (stockMatch) {
+      parsed.stockQuantity = stockMatch[1].replace(',', '.');
+      const unit = stockMatch[2].toLowerCase();
+      parsed.stockUnit = STOCK_UNIT_LABELS[unit] ?? unit;
+    }
+    if (unitsPerDoseMatch) parsed.unitsPerDose = unitsPerDoseMatch[1].replace(',', '.');
+    if (continuousMatch) parsed.continuous = true;
+    if (duration) {
+      parsed.duration = duration;
+      if (!continuousMatch) parsed.continuous = false;
+    }
+    if (startDateMatch) parsed.startDate = toFormDate(startDateMatch[1]);
+    if (endDateMatch) {
+      parsed.endDate = toFormDate(endDateMatch[1]);
+      if (!continuousMatch) parsed.continuous = false;
+    }
+    return parsed;
   };
+
+  const mergeMedication = (
+    current: AssistantMedicationDraft,
+    update: AssistantMedicationDraft,
+    overwrite = true,
+  ): AssistantMedicationDraft => ({
+    name: overwrite || !current.name ? update.name ?? current.name : current.name,
+    dosage: overwrite || !current.dosage ? update.dosage ?? current.dosage : current.dosage,
+    instructions: overwrite || !current.instructions
+      ? update.instructions ?? current.instructions
+      : current.instructions,
+    firstTime: overwrite || !current.firstTime
+      ? update.firstTime ?? current.firstTime
+      : current.firstTime,
+    intervalHours: overwrite || !current.intervalHours
+      ? update.intervalHours ?? current.intervalHours
+      : current.intervalHours,
+    continuous: overwrite || current.continuous === undefined
+      ? update.continuous ?? current.continuous
+      : current.continuous,
+    startDate: overwrite || !current.startDate
+      ? update.startDate ?? current.startDate
+      : current.startDate,
+    endDate: overwrite || !current.endDate
+      ? update.endDate ?? current.endDate
+      : current.endDate,
+    stockQuantity: overwrite || !current.stockQuantity
+      ? update.stockQuantity ?? current.stockQuantity
+      : current.stockQuantity,
+    stockUnit: overwrite || !current.stockUnit
+      ? update.stockUnit ?? current.stockUnit
+      : current.stockUnit,
+    unitsPerDose: overwrite || !current.unitsPerDose
+      ? update.unitsPerDose ?? current.unitsPerDose
+      : current.unitsPerDose,
+    duration: overwrite || !current.duration
+      ? update.duration ?? current.duration
+      : current.duration,
+  });
+
+  const confirmCollection = () => onComplete(medication);
 
   const sendText = () => {
     const text = draft.trim();
     if (!text || isThinking) return;
+
     setDraft('');
     addMessage('user', text);
     setIsThinking(true);
 
-    // Mock response so the interface can be tested before the backend exists.
     setTimeout(() => {
-      const extracted = parseDemoMessage(text);
-      setMedication((current) => ({
-        name: current.name || extracted.name,
-        dose: current.dose || extracted.dose,
-        schedule: current.schedule || extracted.schedule,
-        instructions: current.instructions,
-      }));
-      setShowReview(true);
-      setIsThinking(false);
-      addMessage(
-        'assistant',
-        'Organizei uma primeira versão para você revisar. Esta tela ainda está em modo de demonstração: confira cada campo com a receita. Se faltar dose ou horário, não vou inventar essa informação.',
+      const parsed = parseDemoMessage(text);
+      const isUnknown = /^(pular|não sei|nao sei|não consta|nao consta)$/i.test(text);
+      const hasParsedData = Object.keys(parsed).length > 0;
+      const updatedMedication = mergeMedication(
+        medication,
+        isUnknown ? {} : parsed,
+        !showConfirmation || isAdjusting,
       );
+      setMedication(updatedMedication);
+
+      if (showConfirmation) {
+        if (isAdjusting && !hasParsedData && !isUnknown) {
+          addMessage(
+            'assistant',
+            'Não consegui identificar o campo a ajustar. Informe o campo e o novo valor, por exemplo: dosagem: 50 mg.',
+          );
+        } else if (isAdjusting) {
+          setIsAdjusting(false);
+          addMessage('assistant', 'Cartão atualizado. Confira os dados antes de confirmar.');
+        } else if (hasParsedData) {
+          addMessage('assistant', 'Informação registrada no cartão de confirmação.');
+        } else {
+          addMessage('assistant', 'Para alterar um dado já preenchido, toque em Ajustar.');
+        }
+        setIsThinking(false);
+        return;
+      }
+
+      const missingFields: string[] = [];
+      if (!updatedMedication.name) missingFields.push('o nome do medicamento');
+      if (!updatedMedication.dosage) missingFields.push('a dosagem');
+      if (!updatedMedication.intervalHours) missingFields.push('o intervalo entre doses');
+
+      if (missingFields.length > 0) {
+        addMessage(
+          'assistant',
+          `Ainda não identifiquei ${missingFields.join(', ')}. Você pode informar agora ou confirmar e preencher depois no formulário.`,
+        );
+        setShowConfirmation(true);
+        setIsThinking(false);
+        return;
+      }
+
+      if (!updatedMedication.firstTime && conversationStep === 'medication') {
+        setConversationStep('firstTime');
+        addMessage(
+          'assistant',
+          'Qual é o horário da primeira dose? Você também pode confirmar e preencher esse campo depois.',
+        );
+        setShowConfirmation(true);
+        setIsThinking(false);
+        return;
+      }
+
+      setShowConfirmation(true);
+      setIsThinking(false);
     }, 450);
   };
+
 
   const startRecording = async () => {
     try {
@@ -177,33 +374,6 @@ export default function MedicationAssistantScreen({
       setIsRecording(false);
       Alert.alert('Erro ao finalizar áudio', 'Tente gravar novamente.');
     }
-  };
-
-  const updateMedication = (key: keyof ExtractedMedication, value: string) => {
-    setMedication((current) => ({ ...current, [key]: value }));
-  };
-
-  const confirmMedication = () => {
-    if (!medication.name.trim()) {
-      Alert.alert('Falta o nome', 'Informe o nome do medicamento antes de continuar.');
-      return;
-    }
-    if (!medication.dose.trim() || !medication.schedule.trim()) {
-      Alert.alert(
-        'Confira a receita',
-        'Preencha a dose e o horário conforme a receita. Não confirme informações que não estejam claras.',
-      );
-      return;
-    }
-    onConfirmMedication?.(medication);
-    addMessage('assistant', 'Revisão concluída. O próximo passo será enviar os dados confirmados para a API e salvar o medicamento.');
-    setShowReview(false);
-    Alert.alert(
-      'Dados revisados',
-      onConfirmMedication
-        ? 'Os dados foram enviados para a função de confirmação do aplicativo.'
-        : 'A interface está pronta. A gravação no cadastro será ligada à API do backend.',
-    );
   };
 
   return (
@@ -260,6 +430,59 @@ export default function MedicationAssistantScreen({
           );
         })}
 
+        {showConfirmation && (
+          <View style={[styles.messageRow, styles.assistantRow]}>
+            <View style={styles.avatar}>
+              <Sparkles size={15} color={COLORS.blue} />
+            </View>
+            <View style={styles.confirmationCard}>
+              <Text style={styles.confirmationTitle}>CARTÃO DE CONFIRMAÇÃO</Text>
+              <ConfirmationRow label="Medicamento" value={medication.name} />
+              <ConfirmationRow label="Dosagem" value={medication.dosage} />
+              <ConfirmationRow
+                label="Intervalo"
+                value={medication.intervalHours ? `${medication.intervalHours} horas` : undefined}
+              />
+              <ConfirmationRow label="Primeira dose" value={medication.firstTime} />
+              <ConfirmationRow
+                label="Estoque inicial"
+                value={
+                  medication.stockQuantity
+                    ? `${medication.stockQuantity} ${medication.stockUnit ?? ''}`.trim()
+                    : undefined
+                }
+              />
+              <ConfirmationRow label="Duração" value={medication.duration} />
+              {medication.continuous !== undefined && (
+                <ConfirmationRow
+                  label="Uso"
+                  value={medication.continuous ? 'Contínuo' : 'Por período determinado'}
+                />
+              )}
+              <View style={styles.confirmationActions}>
+                <Pressable
+                  style={styles.adjustButton}
+                  onPress={() => {
+                    setIsAdjusting(true);
+                    addMessage(
+                      'assistant',
+                      'O que deseja ajustar? Escreva o campo e o novo valor, por exemplo: dosagem: 50 mg, primeira dose: 07h ou estoque inicial: 12 comprimidos.',
+                    );
+                  }}
+                >
+                  <Text style={styles.adjustButtonText}>Ajustar</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.confirmButton}
+                  onPress={confirmCollection}
+                >
+                  <Text style={styles.confirmButtonText}>Confirmar</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
         {isThinking && (
           <View style={[styles.messageRow, styles.assistantRow]}>
             <View style={styles.avatar}><Sparkles size={15} color={COLORS.blue} /></View>
@@ -279,32 +502,6 @@ export default function MedicationAssistantScreen({
           </View>
         )}
 
-        {showReview && (
-          <View style={styles.reviewCard}>
-            <View style={styles.reviewHeader}>
-              <View>
-                <Text style={styles.reviewTitle}>Revise os dados</Text>
-                <Text style={styles.reviewSubtitle}>Confirme com a receita original</Text>
-              </View>
-              <View style={styles.reviewBadge}><Text style={styles.reviewBadgeText}>Rascunho</Text></View>
-            </View>
-            <Field label="Nome do medicamento" value={medication.name} onChangeText={(v) => updateMedication('name', v)} placeholder="Ex.: Losartana" />
-            <Field label="Dose / quantidade" value={medication.dose} onChangeText={(v) => updateMedication('dose', v)} placeholder="Ex.: 50 mg" />
-            <Field label="Horário / frequência" value={medication.schedule} onChangeText={(v) => updateMedication('schedule', v)} placeholder="Ex.: às 8h, 1 vez ao dia" />
-            <Field label="Orientações (opcional)" value={medication.instructions} onChangeText={(v) => updateMedication('instructions', v)} placeholder="Ex.: tomar após o café" multiline />
-            <View style={styles.reviewActions}>
-              <Pressable style={styles.secondaryButton} onPress={() => setShowReview(false)}>
-                <X size={16} color={COLORS.dark} />
-                <Text style={styles.secondaryButtonText}>Editar depois</Text>
-              </Pressable>
-              <Pressable style={styles.confirmButton} onPress={confirmMedication}>
-                <Check size={17} color={COLORS.white} />
-                <Text style={styles.confirmButtonText}>Confirmar dados</Text>
-              </Pressable>
-            </View>
-            <Text style={styles.safetyText}>Não confirme dose, frequência ou horário se não estiverem claros na receita.</Text>
-          </View>
-        )}
       </ScrollView>
 
       <View style={styles.composerArea}>
@@ -344,37 +541,25 @@ export default function MedicationAssistantScreen({
             <Send size={18} color={COLORS.white} />
           </Pressable>
         </View>
-        <Text style={styles.footerHint}>Use texto ou áudio. Revise os dados antes de salvar.</Text>
+        <View style={{ paddingHorizontal: 8, paddingBottom: 6 }}>
+  <Text style={{ fontSize: 11, color: '#82939A' }}>
+    Dica: informe nome, dosagem e intervalo entre doses.
+  </Text>
+  <Text style={{ fontSize: 12, color: '#267F91', marginTop: 2 }}>
+    Ex.: Dipirona, 50 mg, a cada 8 horas
+  </Text>
+        </View>
+        <Text style={styles.footerHint}>Use texto ou áudio. Confira os dados no formulário antes de salvar.</Text>
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  multiline = false,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  placeholder: string;
-  multiline?: boolean;
-}) {
+function ConfirmationRow({ label, value }: { label: string; value?: string }) {
   return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={[styles.fieldInput, multiline && styles.multilineInput]}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor="#8BA0AA"
-        multiline={multiline}
-        textAlignVertical={multiline ? 'top' : 'center'}
-      />
+    <View style={styles.confirmationRow}>
+      <Text style={styles.confirmationLabel}>{label}</Text>
+      <Text style={styles.confirmationValue}>{value?.trim() || 'Não informado'}</Text>
     </View>
   );
 }
@@ -431,35 +616,48 @@ const styles = StyleSheet.create({
     borderRadius: 12, padding: 11,
   },
   audioReadyText: { flex: 1, color: COLORS.green, fontSize: 12, lineHeight: 17 },
-  reviewCard: {
-    backgroundColor: COLORS.white, borderRadius: 20, padding: 15,
-    borderWidth: 1, borderColor: COLORS.border, marginTop: 4,
+  confirmationCard: {
+    flex: 1,
+    backgroundColor: COLORS.white,
+    borderRadius: 17,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 10,
   },
-  reviewHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 },
-  reviewTitle: { color: COLORS.dark, fontSize: 16, fontWeight: '800' },
-  reviewSubtitle: { color: COLORS.muted, fontSize: 12, marginTop: 3 },
-  reviewBadge: { backgroundColor: '#FFF3D8', borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5 },
-  reviewBadgeText: { color: '#876019', fontSize: 11, fontWeight: '700' },
-  field: { marginBottom: 10 },
-  fieldLabel: { color: COLORS.dark, fontSize: 12, fontWeight: '700', marginBottom: 5 },
-  fieldInput: {
-    minHeight: 43, borderRadius: 11, borderWidth: 1, borderColor: COLORS.border,
-    backgroundColor: '#FBFDFE', paddingHorizontal: 11, paddingVertical: 9,
-    color: COLORS.dark, fontSize: 14,
+  confirmationTitle: {
+    color: COLORS.dark,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    marginBottom: 3,
   },
-  multilineInput: { minHeight: 64 },
-  reviewActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  secondaryButton: {
-    flex: 1, minHeight: 43, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+  confirmationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.bg,
+    paddingBottom: 7,
   },
-  secondaryButtonText: { color: COLORS.dark, fontSize: 12, fontWeight: '700' },
+  confirmationLabel: { color: COLORS.muted, fontSize: 12, flex: 1 },
+  confirmationValue: { color: COLORS.dark, fontSize: 12, fontWeight: '700', flex: 1, textAlign: 'right' },
+  confirmationActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
+  adjustButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  adjustButtonText: { color: COLORS.dark, fontSize: 12, fontWeight: '700' },
   confirmButton: {
-    flex: 1.2, minHeight: 43, borderRadius: 12, backgroundColor: COLORS.blue,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: COLORS.blue,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   confirmButtonText: { color: COLORS.white, fontSize: 12, fontWeight: '800' },
-  safetyText: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 10 },
   composerArea: {
     backgroundColor: COLORS.white, borderTopWidth: 1, borderTopColor: COLORS.border,
     paddingHorizontal: 12, paddingTop: 10, paddingBottom: Platform.OS === 'ios' ? 20 : 12,
@@ -486,5 +684,42 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.blue,
   },
   sendDisabled: { opacity: 0.45 },
+  exampleHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  marginBottom: 3,
+},
+
+exampleContainer: {
+  marginHorizontal: 20,
+  marginBottom: 6,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  backgroundColor: '#F3F8FA',
+  borderRadius: 12,
+},
+exampleTitle: {
+  fontSize: 13,
+  fontWeight: '700',
+  color: '#173746',
+},
+exampleText: {
+  fontSize: 12,
+  color: '#536B75',
+  marginBottom: 4,
+},
+exampleExample: {
+  fontSize: 13,
+  fontWeight: '600',
+  color: '#267F91',
+  marginBottom: 4,
+},
+exampleHint: {
+  fontSize: 11,
+  color: '#82939A',
+  lineHeight: 15,
+},
+
   footerHint: { color: COLORS.muted, fontSize: 10, textAlign: 'center', marginTop: 8 },
 });

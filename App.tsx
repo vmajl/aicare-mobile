@@ -1,14 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import {
   Bell, Clock, CalendarDays, Pill, UsersRound, Camera, MessageCircle, Plus, X,
-  Search, Pencil, Trash2, Package, Sparkles, ArrowLeft, Bot, Mic, Send, Check,
-  CircleStop,
+  Search, Pencil, Trash2, Package, Sparkles,
 } from 'lucide-react-native';
 import {
   Alert, View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  StatusBar, Platform, useWindowDimensions, Switch, KeyboardAvoidingView,
+  StatusBar, Platform, useWindowDimensions, Switch,
 } from 'react-native';
-import MedicationAssistantScreen from './MedicationAssistantScreen';
+import MedicationAssistantScreen, {
+  type AssistantMedicationDraft,
+} from './MedicationAssistantScreen';
 
 const BLUE = '#50A9C3';
 const DARK = '#102F40';
@@ -35,8 +36,8 @@ type Medicine = {
   administered: boolean;
 };
 const emptyMedicine = () => ({
-  name: '', dosage: '', instructions: '', firstTime: '08:00', intervalHours: '24',
-  continuous: true, startDate: new Date().toISOString().slice(0, 10), endDate: '',
+  name: '', dosage: '', instructions: '', firstTime: '', intervalHours: '',
+  continuous: true, startDate: '', endDate: '',
   stockQuantity: '', stockUnit: 'unidades', unitsPerDose: '1',
 });
 type MedicineDraft = ReturnType<typeof emptyMedicine>;
@@ -54,6 +55,7 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<MedicineDraft>(emptyMedicine());
   const [showAssistant, setShowAssistant] = useState(false);
+  const [assistantDuration, setAssistantDuration] = useState('');
 
   const filteredMedicines = useMemo(() => medicines.filter((medicine) =>
     medicine.name.toLowerCase().includes(search.toLowerCase().trim())
@@ -66,6 +68,7 @@ export default function App() {
   function openNewMedicineForm() {
     setEditingId(null);
     setDraft(emptyMedicine());
+    setAssistantDuration('');
     setShowMedicineForm(true);
     setShowAssistant(false);
     setActiveTab('Medicamentos');
@@ -79,6 +82,7 @@ export default function App() {
 
   function openEditMedicine(medicine: Medicine) {
     setEditingId(medicine.id);
+    setAssistantDuration('');
     setDraft({
       name: medicine.name, dosage: medicine.dosage, instructions: medicine.instructions,
       firstTime: medicine.firstTime, intervalHours: medicine.intervalHours,
@@ -193,6 +197,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
 
   setDraft(emptyMedicine());
   setEditingId(null);
+  setAssistantDuration('');
   setShowMedicineForm(false);
   setSearch('');
 
@@ -242,29 +247,27 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
     ));
   }
 
-  function confirmAssistantMedication(data: { name: string; dose: string; schedule: string; instructions: string }) {
-    const match = data.schedule.match(/(\d{1,2}:\d{2})/);
-    const time = match?.[1] ?? '';
-    if (!data.name.trim() || !data.dose.trim() || !time) {
-      Alert.alert(
-        'Confira os dados',
-        'Para transferir ao cadastro, informe nome, dose e um primeiro horário no formato HH:MM. Você também pode continuar pelo formulário manual.',
-      );
-      return;
-    }
+  function completeAssistantMedication(data: AssistantMedicationDraft) {
+    const defaults = emptyMedicine();
     setEditingId(null);
+    setAssistantDuration(data.duration ?? '');
     setDraft({
-      ...emptyMedicine(),
-      name: data.name.trim(),
-      dosage: data.dose.trim(),
-      firstTime: time,
-      instructions: data.instructions.trim(),
-      continuous: true,
+      ...defaults,
+      name: data.name ?? defaults.name,
+      dosage: data.dosage ?? defaults.dosage,
+      instructions: data.instructions ?? defaults.instructions,
+      firstTime: data.firstTime ?? defaults.firstTime,
+      intervalHours: data.intervalHours ?? defaults.intervalHours,
+      continuous: data.continuous ?? (data.duration ? false : defaults.continuous),
+      startDate: data.startDate ?? defaults.startDate,
+      endDate: data.endDate ?? defaults.endDate,
+      stockQuantity: data.stockQuantity ?? defaults.stockQuantity,
+      stockUnit: data.stockUnit ?? defaults.stockUnit,
+      unitsPerDose: data.unitsPerDose ?? defaults.unitsPerDose,
     });
     setShowAssistant(false);
     setShowMedicineForm(true);
     setActiveTab('Medicamentos');
-    Alert.alert('Dados transferidos', 'Revise os campos restantes e salve o medicamento no formulário.');
   }
 
   function Header() {
@@ -350,7 +353,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
     return <View style={styles.formCard}>
       <View style={styles.formHeader}>
         <Text style={styles.cardTitle}>{editingId ? 'Editar medicamento' : 'Cadastrar medicamento'}</Text>
-        <Pressable accessibilityLabel="Fechar formulário" onPress={() => { setShowMedicineForm(false); setEditingId(null); }} style={styles.iconButton}><X size={20} color={DARK} /></Pressable>
+        <Pressable accessibilityLabel="Fechar formulário" onPress={() => { setShowMedicineForm(false); setEditingId(null); setAssistantDuration(''); }} style={styles.iconButton}><X size={20} color={DARK} /></Pressable>
       </View>
       <Pressable onPress={openAssistant} style={styles.assistantBanner}>
         <Sparkles size={19} color={BLUE} />
@@ -363,13 +366,14 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
       {Field({label: 'Nome *', value: draft.name, onChangeText: (v: string) => updateDraft('name', v), placeholder: 'Ex.: Losartana'})}
       {Field({label: 'Dosagem *', value: draft.dosage, onChangeText: (v: string) => updateDraft('dosage', v), placeholder: 'Ex.: 50 mg'})}
       {Field({label: 'Instruções de uso', value: draft.instructions, onChangeText: (v: string) => updateDraft('instructions', v), placeholder: 'Ex.: Tomar com água após o café'})}
-      {Field({label: 'Primeiro horário * (HH:MM)', value: draft.firstTime, onChangeText: (v: string) => updateDraft('firstTime', v), placeholder: '08:00'})}
-      {Field({label: 'Intervalo entre doses (horas) *', value: draft.intervalHours, onChangeText: (v: string) => updateDraft('intervalHours', v), placeholder: '12', keyboardType: 'numeric'})}
-      {Field({label: 'Data de início * (DD/MM/AAAA)', value: draft.startDate, onChangeText: (v: string) => updateDraft('startDate', v), placeholder: '15/10/2026'})}
+      {Field({label: 'Primeiro horário * (HH:MM)', value: draft.firstTime, onChangeText: (v: string) => updateDraft('firstTime', v), placeholder: 'Ex.: 08:00'})}
+      {Field({label: 'Intervalo entre doses (horas) *', value: draft.intervalHours, onChangeText: (v: string) => updateDraft('intervalHours', v), placeholder: 'Ex.:12', keyboardType: 'numeric'})}
+      {Field({label: 'Data de início * (DD/MM/AAAA)', value: draft.startDate, onChangeText: (v: string) => updateDraft('startDate', v), placeholder: 'Ex.: 15/10/2026'})}
       <View style={styles.switchRow}>
         <View style={styles.switchText}><Text style={styles.fieldLabel}>Uso contínuo</Text><Text style={styles.smallDescription}>Desative para informar uma data de término.</Text></View>
         <Switch value={draft.continuous} onValueChange={(v) => updateDraft('continuous', v)} trackColor={{ false: BORDER, true: '#A8DDE9' }} thumbColor={draft.continuous ? BLUE : '#F5F5F5'} />
       </View>
+      {!!assistantDuration && <Text style={styles.smallDescription}>Duração informada no assistente: {assistantDuration}{draft.continuous ? '.' : '. Preencha a data final conforme a receita.'}</Text>}
       {!draft.continuous && Field({label: 'Data de término * (DD/MM/AAAA)', value: draft.endDate, onChangeText: (v: string) => updateDraft('endDate', v), placeholder: '15/11/2026'})}
       <View style={styles.subsectionTitle}><Package size={18} color={BLUE} /><Text style={styles.cardTitle}>Estoque</Text></View>
       {Field({label: 'Quantidade atual (opcional)', value: draft.stockQuantity, onChangeText: (v: string) => updateDraft('stockQuantity', v), placeholder: 'Ex.: 30', keyboardType: 'decimal-pad'})}
@@ -384,7 +388,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
       {Field({label: 'Unidades por dose', value: draft.unitsPerDose, onChangeText: (v: string) => updateDraft('unitsPerDose', v), placeholder: '1', keyboardType: 'decimal-pad'})}
       <Text style={styles.smallDescription}>Os dados ainda são demonstrativos e não são enviados para uma API.</Text>
       <View style={styles.formActions}>
-        <Pressable onPress={() => { setShowMedicineForm(false); setEditingId(null); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Cancelar</Text></Pressable>
+        <Pressable onPress={() => { setShowMedicineForm(false); setEditingId(null); setAssistantDuration(''); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Cancelar</Text></Pressable>
         <Pressable onPress={saveMedicine} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{editingId ? 'Salvar alterações' : 'Salvar medicamento'}</Text></Pressable>
       </View>
     </View>;
@@ -432,13 +436,13 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
       <View style={styles.noScheduleCard}><Text style={styles.emptyTitle}>Familiares e cuidadores</Text><Text style={styles.emptyDescription}>O compartilhamento e os convites serão implementados na próxima etapa.</Text></View>
     </>;
   }
-    if (showAssistant) {
+  if (showAssistant) {
   return (
     <View style={styles.app}>
       <StatusBar backgroundColor={BG} barStyle="dark-content" translucent={false} />
       <MedicationAssistantScreen
         onBack={() => setShowAssistant(false)}
-        onConfirmMedication={confirmAssistantMedication}
+        onComplete={completeAssistantMedication}
       />
     </View>
   );
