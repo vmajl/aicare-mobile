@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Bell, Clock, CalendarDays, Pill, UsersRound, Camera, MessageCircle, Plus, X,
   Search, Pencil, Trash2, Package, Sparkles,
@@ -10,6 +10,7 @@ import {
 import MedicationAssistantScreen, {
   type AssistantMedicationDraft,
 } from './MedicationAssistantScreen';
+import { buscarMedicamentos, criarMedicamento, atualizarMedicamento } from './api';
 
 const BLUE = '#50A9C3';
 const DARK = '#102F40';
@@ -50,13 +51,57 @@ export default function App() {
   const compact = width < 390;
   const [activeTab, setActiveTab] = useState<Tab>('Início');
   const [medicines, setMedicines] = useState<Medicine[]>([]);
+  useEffect(() => {
+  let ativo = true;
+
+  buscarMedicamentos()
+    .then((dados) => {
+      if (!ativo) return;
+
+      setMedicines(
+        dados.map((item: any) => ({
+          id: String(item.id),
+          name: item.name,
+          dosage: item.dosage,
+          instructions: item.instructions ?? '',
+          firstTime: item.first_dose_at
+            ? item.first_dose_at.slice(11, 16)
+            : '',
+          intervalHours:
+            item.interval_hours != null
+              ? String(item.interval_hours)
+              : '',
+          continuous: item.continuous,
+          startDate: item.start_date ?? '',
+          endDate: item.end_date ?? '',
+          stockQuantity:
+            item.stock_quantity != null
+              ? String(item.stock_quantity)
+              : '',
+          stockUnit: item.stock_unit ?? 'unidades',
+          unitsPerDose:
+            item.units_per_dose != null
+              ? String(item.units_per_dose)
+              : '1',
+          active: item.active,
+          administered: false,
+        })),
+      );
+    })
+    .catch((erro) => {
+      console.error('Erro ao carregar medicamentos da API:', erro);
+    });
+
+  return () => {
+    ativo = false;
+  };
+}, []);
   const [search, setSearch] = useState('');
   const [showMedicineForm, setShowMedicineForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<MedicineDraft>(emptyMedicine());
   const [showAssistant, setShowAssistant] = useState(false);
   const [assistantDuration, setAssistantDuration] = useState('');
-
   const filteredMedicines = useMemo(() => medicines.filter((medicine) =>
     medicine.name.toLowerCase().includes(search.toLowerCase().trim())
   ), [medicines, search]);
@@ -103,7 +148,44 @@ function showAppAlert(title: string, message: string) {
   }
 }
 
-function saveMedicine() {
+
+function converterDataParaISO(data: string): string {
+  const valor = data.trim();
+
+  // A API devolve datas no formato ISO (AAAA-MM-DD), enquanto o
+  // formulário também aceita datas brasileiras (DD/MM/AAAA).
+  let dataISO: string;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+    dataISO = valor;
+  } else {
+    const partes = valor.split('/');
+
+    if (partes.length !== 3) {
+      throw new Error('Data inválida. Use DD/MM/AAAA.');
+    }
+
+    const [dia, mes, ano] = partes;
+    dataISO = `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`;
+  }
+
+  const [anoISO, mesISO, diaISO] = dataISO.split('-').map(Number);
+  const dataVerificada = new Date(`${dataISO}T12:00:00`);
+
+  if (
+    Number.isNaN(dataVerificada.getTime()) ||
+    dataVerificada.getFullYear() !== anoISO ||
+    dataVerificada.getMonth() + 1 !== mesISO ||
+    dataVerificada.getDate() !== diaISO
+  ) {
+    throw new Error('A data informada não existe.');
+  }
+
+  return dataISO;
+}
+
+
+async function saveMedicine() {
   const {
     name,
     dosage,
@@ -116,21 +198,26 @@ function saveMedicine() {
     continuous,
   } = draft;
 
-  if (!name.trim() || !dosage.trim() || !firstTime.trim() || !startDate.trim()) {
+  if (
+    !name.trim() ||
+    !dosage.trim() ||
+    !firstTime.trim() ||
+    !startDate.trim()
+  ) {
     showAppAlert(
       'Campos obrigatórios',
       'Informe nome, dosagem, primeiro horário e data de início.'
     );
     return;
   }
-  
-if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
-  showAppAlert(
-    'Horário inválido',
-    'Informe um horário válido no formato HH:MM, por exemplo 08:00.'
-  );
-  return;
-}
+
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
+    showAppAlert(
+      'Horário inválido',
+      'Informe um horário válido no formato HH:MM, por exemplo 08:00.'
+    );
+    return;
+  }
 
   const interval = Number(intervalHours);
 
@@ -141,6 +228,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
     );
     return;
   }
+
   if (!continuous && (!endDate.trim() || endDate < startDate)) {
     showAppAlert(
       'Data de término',
@@ -151,7 +239,8 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
 
   if (
     stockQuantity.trim() &&
-    (!Number.isFinite(Number(stockQuantity)) || Number(stockQuantity) < 0)
+    (!Number.isFinite(Number(stockQuantity)) ||
+      Number(stockQuantity) < 0)
   ) {
     showAppAlert(
       'Estoque inválido',
@@ -160,7 +249,10 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
     return;
   }
 
-  if (!Number.isFinite(Number(unitsPerDose)) || Number(unitsPerDose) <= 0) {
+  if (
+    !Number.isFinite(Number(unitsPerDose)) ||
+    Number(unitsPerDose) <= 0
+  ) {
     showAppAlert(
       'Quantidade por dose inválida',
       'Informe um valor maior que zero.'
@@ -168,32 +260,104 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
     return;
   }
 
-  const existing = editingId
-    ? medicines.find((item) => item.id === editingId)
-    : undefined;
-
-  const saved: Medicine = {
-    id: editingId ?? `${Date.now()}`,
+  const dadosMedicamento = {
     name: name.trim(),
     dosage: dosage.trim(),
-    instructions: draft.instructions.trim(),
-    firstTime: firstTime.trim(),
-    intervalHours: String(interval),
+    instructions: draft.instructions.trim() || null,
+    first_dose_at: `${converterDataParaISO(startDate)}T${firstTime.trim()}:00`,
+    interval_hours: interval,
     continuous,
-    startDate,
-    endDate: continuous ? '' : endDate,
-    stockQuantity: stockQuantity.trim(),
-    stockUnit: draft.stockUnit,
-    unitsPerDose: String(Number(unitsPerDose)),
-    active: existing?.active ?? true,
-    administered: existing?.administered ?? false,
+    start_date: converterDataParaISO(startDate),
+    end_date: continuous ? null : converterDataParaISO(endDate),
+    stock_quantity: stockQuantity.trim()
+      ? Number(stockQuantity)
+      : null,
+    stock_unit: draft.stockUnit,
+    units_per_dose: Number(unitsPerDose),
+    active: editingId
+      ? medicines.find((medicine) => medicine.id === editingId)?.active ?? true
+      : true,
   };
 
-  setMedicines((current) =>
-    editingId
-      ? current.map((item) => (item.id === editingId ? saved : item))
-      : [...current, saved]
-  );
+  try {
+    if (editingId) {
+      const atualizado = await atualizarMedicamento(
+        editingId,
+        dadosMedicamento
+      );
+
+      const atualizadoNaLista: Medicine = {
+        id: String(atualizado.id),
+        name: atualizado.name,
+        dosage: atualizado.dosage,
+        instructions: atualizado.instructions ?? '',
+        firstTime: atualizado.first_dose_at
+          ? atualizado.first_dose_at.slice(11, 16)
+          : firstTime.trim(),
+        intervalHours: String(atualizado.interval_hours ?? interval),
+        continuous: atualizado.continuous,
+        startDate: atualizado.start_date ?? startDate,
+        endDate: atualizado.end_date ?? '',
+        stockQuantity: atualizado.stock_quantity != null
+          ? String(atualizado.stock_quantity)
+          : '',
+        stockUnit: atualizado.stock_unit ?? draft.stockUnit,
+        unitsPerDose: String(
+          atualizado.units_per_dose ?? unitsPerDose
+        ),
+        active: atualizado.active,
+        administered:
+          medicines.find((medicine) => medicine.id === editingId)
+            ?.administered ?? false,
+      };
+
+      setMedicines((current) =>
+        current.map((medicine) =>
+          medicine.id === editingId ? atualizadoNaLista : medicine
+        )
+      );
+    } else {
+      const criado = await criarMedicamento({
+        patient_id: 1,
+        ...dadosMedicamento,
+      });
+
+      const salvo: Medicine = {
+        id: String(criado.id),
+        name: criado.name,
+        dosage: criado.dosage,
+        instructions: criado.instructions ?? '',
+        firstTime: criado.first_dose_at
+          ? criado.first_dose_at.slice(11, 16)
+          : firstTime.trim(),
+        intervalHours: String(criado.interval_hours ?? interval),
+        continuous: criado.continuous,
+        startDate: criado.start_date ?? startDate,
+        endDate: criado.end_date ?? '',
+        stockQuantity: criado.stock_quantity != null
+          ? String(criado.stock_quantity)
+          : '',
+        stockUnit: criado.stock_unit ?? draft.stockUnit,
+        unitsPerDose: String(
+          criado.units_per_dose ?? unitsPerDose
+        ),
+        active: criado.active,
+        administered: false,
+      };
+
+      setMedicines((current) => [...current, salvo]);
+    }
+  } catch (erro) {
+    showAppAlert(
+      'Erro ao salvar',
+      erro instanceof Error
+        ? erro.message
+        : 'Não foi possível salvar o medicamento.'
+    );
+    return;
+  }
+
+  const estavaEditando = Boolean(editingId);
 
   setDraft(emptyMedicine());
   setEditingId(null);
@@ -202,11 +366,12 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
   setSearch('');
 
   showAppAlert(
-    'Medicamento salvo',
-    'O cadastro foi salvo nesta sessão do aplicativo.'
+    estavaEditando ? 'Medicamento atualizado' : 'Medicamento salvo',
+    estavaEditando
+      ? 'As alterações foram salvas no banco de dados.'
+      : 'O medicamento foi cadastrado no banco de dados.'
   );
 }
-
 
   function deleteMedicine(medicine: Medicine) {
   const removeMedicine = () => {
@@ -306,7 +471,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
         </Pressable>
         <View style={styles.iconActions}>
           <Pressable accessibilityLabel={`Editar ${medicine.name}`} onPress={() => openEditMedicine(medicine)} style={styles.iconButton}><Pencil size={17} color={BLUE} /></Pressable>
-          <Pressable accessibilityRole="button"accessibilityLabel={`Excluir ${medicine.name}`} onPress={() => { console.log('Clique em excluir:', medicine.name);deleteMedicine(medicine);}}
+          <Pressable accessibilityRole="button" accessibilityLabel={`Excluir ${medicine.name}`} onPress={() => { console.log('Clique em excluir:', medicine.name);deleteMedicine(medicine);}}
            style={styles.iconButton}
            ><Trash2 size={17} color="#B54A4A" />
           </Pressable>
@@ -386,7 +551,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
         )}
       </View>
       {Field({label: 'Unidades por dose', value: draft.unitsPerDose, onChangeText: (v: string) => updateDraft('unitsPerDose', v), placeholder: '1', keyboardType: 'decimal-pad'})}
-      <Text style={styles.smallDescription}>Os dados ainda são demonstrativos e não são enviados para uma API.</Text>
+      <Text style={styles.smallDescription}>Os medicamentos são salvos pela API do AICare.</Text>
       <View style={styles.formActions}>
         <Pressable onPress={() => { setShowMedicineForm(false); setEditingId(null); setAssistantDuration(''); }} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>Cancelar</Text></Pressable>
         <Pressable onPress={saveMedicine} style={styles.primaryButton}><Text style={styles.primaryButtonText}>{editingId ? 'Salvar alterações' : 'Salvar medicamento'}</Text></Pressable>
@@ -439,7 +604,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
   if (showAssistant) {
   return (
     <View style={styles.app}>
-      <StatusBar backgroundColor={BG} barStyle="dark-content" translucent={false} />
+      <StatusBar barStyle="dark-content" />
       <MedicationAssistantScreen
         onBack={() => setShowAssistant(false)}
         onComplete={completeAssistantMedication}
@@ -450,7 +615,7 @@ if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(firstTime.trim())) {
   const ActiveScreen = activeTab === 'Medicamentos' ? MedicinesScreen : activeTab === 'Diário' ? DiaryScreen : activeTab === 'Pessoas' ? PeopleScreen : HomeScreen;
 
   return <View style={styles.app}>
-    <StatusBar backgroundColor={BG} barStyle="dark-content" translucent={false} />
+    <StatusBar barStyle="dark-content" />
     {Header()}
     <ScrollView style={styles.mainScroll} contentContainerStyle={[styles.content, compact && styles.contentCompact]} keyboardShouldPersistTaps="handled">
       {ActiveScreen()}
