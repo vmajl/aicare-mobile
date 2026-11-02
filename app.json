@@ -30,7 +30,8 @@
     "plugins": [
       "expo-audio",
       "expo-asset",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-router"
     ],
     "extra": {
       "eas": {
