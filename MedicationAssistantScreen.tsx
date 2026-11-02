@@ -101,7 +101,7 @@ export default function MedicationAssistantScreen({
   const [conversationStep, setConversationStep] = useState<'medication' | 'firstTime'>('medication');
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   useEffect(() => {

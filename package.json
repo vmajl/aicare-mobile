@@ -1,12 +1,16 @@
 {
   "name": "aicare-mobile",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.15",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "^58.0.0",
     "expo-asset": "~58.0.18",
     "expo-audio": "~58.0.10",
+    "expo-file-system": "~58.0.13",
+    "expo-image-picker": "~58.0.10",
+    "expo-router": "~58.0.29",
     "expo-status-bar": "~58.0.4",
     "lucide-react-native": "^1.57.0",
     "react": "19.3.0",
