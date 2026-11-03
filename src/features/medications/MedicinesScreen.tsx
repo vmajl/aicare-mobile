@@ -10,6 +10,7 @@ import {
   View,
   ScrollView,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import {
   Pill,
   Plus,
@@ -72,6 +73,8 @@ function movementLabel(type: InventoryMovement['type']) {
 }
 
 export default function MedicinesScreen() {
+  const router = useRouter();
+
   const {
     medicines,
     loading,
@@ -269,15 +272,27 @@ export default function MedicinesScreen() {
         </View>
 
         {!showForm && (
-          <Pressable
-            style={styles.addButton}
-            onPress={openNewMedicine}
-          >
-            <Plus size={19} color="#FFFFFF" />
-            <Text style={styles.addButtonText}>
-              Novo medicamento
-            </Text>
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.assistantButton}
+              onPress={() => router.push('/assistente-medicamentos')}
+            >
+              <Pill size={19} color={COLORS.blue} />
+              <Text style={styles.assistantButtonText}>
+                Assistente de medicamentos
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.addButton}
+              onPress={openNewMedicine}
+            >
+              <Plus size={19} color="#FFFFFF" />
+              <Text style={styles.addButtonText}>
+                Novo medicamento
+              </Text>
+            </Pressable>
+          </View>
         )}
       </View>
 
@@ -740,6 +755,9 @@ const styles = StyleSheet.create({
   header: {
     gap: 16,
   },
+  headerActions: {
+    gap: 10,
+  },
   heading: {
     gap: 5,
   },
@@ -756,6 +774,22 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     fontSize: 13,
     lineHeight: 20,
+  },
+  assistantButton: {
+    backgroundColor: '#EAF5F8',
+    borderWidth: 1,
+    borderColor: '#C8E3EB',
+    borderRadius: 9,
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  assistantButtonText: {
+    color: COLORS.dark,
+    fontWeight: '800',
+    fontSize: 14,
   },
   addButton: {
     backgroundColor: COLORS.blue,

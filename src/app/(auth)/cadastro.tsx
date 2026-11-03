@@ -90,7 +90,7 @@ export default function CadastroScreen() {
       Alert.alert(
         'Cadastro realizado',
         mode === 'new'
-          ? 'Seu acompanhamento foi criado. Você agora é a administradora da família.'
+          ? 'Seu acompanhamento foi criado. Você agora é o administrador da família.'
           : 'Sua conta foi criada e vinculada ao acompanhamento do convite.',
         [
           {
@@ -169,7 +169,7 @@ export default function CadastroScreen() {
 
             <Text style={styles.modeDescription}>
               Crie um espaço para acompanhar os cuidados de sua família.
-              Você será a administradora e poderá convidar outras pessoas.
+              Você será o administrador e poderá convidar outras pessoas.
             </Text>
 
             <Text style={styles.modeBadge}>
@@ -305,7 +305,7 @@ export default function CadastroScreen() {
               <View style={styles.notice}>
                 <Text style={styles.noticeTitle}>
                   {mode === 'new'
-                    ? 'Você será a administradora'
+                    ? 'Você será o administrador'
                     : 'Acesso por convite'}
                 </Text>
 
