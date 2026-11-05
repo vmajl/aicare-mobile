@@ -210,10 +210,10 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
   const shareInvite = async (invite: Invite) => {
     const message =
-      `Você foi convidado(a) para participar do AICare!\\n\\n` +
-      `Tipo de acesso: ${invite.role}\\n` +
-      `Código de convite: ${invite.code}\\n\\n` +
-      `Validade: até ${formatDate(invite.expiresAt)}.\\n\\n` +
+      `Você foi convidado(a) para participar do AICare!\n\n` +
+      `Tipo de acesso: ${invite.role}\n` +
+      `Código de convite: ${invite.code}\n\n` +
+      `Validade: até ${formatDate(invite.expiresAt)}.\n\n` +
       `Utilize esse código no aplicativo AICare para solicitar acesso.`;
 
     try {
