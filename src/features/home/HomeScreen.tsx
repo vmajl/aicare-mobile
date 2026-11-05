@@ -174,7 +174,7 @@ const refreshTodayPhotoStatus = useCallback(async () => {
           await ImagePicker.requestCameraPermissionsAsync();
 
         if (!permission.granted) {
-        Alert.alert(
+          Alert.alert(
           'Permissão necessária',
           'Autorize o acesso à câmera nas configurações do celular.',
         );
@@ -212,7 +212,7 @@ const refreshTodayPhotoStatus = useCallback(async () => {
           await ImagePicker.requestMediaLibraryPermissionsAsync();
 
         if (!permission.granted) {
-        Alert.alert(
+          Alert.alert(
           'Permissão necessária',
           'Autorize o acesso às fotos nas configurações do celular.',
         );
