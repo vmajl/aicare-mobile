@@ -279,7 +279,7 @@ async function savePhotoPermanently(
   const destination = new File(directory, fileName);
   const source = new File(temporaryUri);
 
-  source.copy(destination);
+  await source.copy(destination);
 
   return destination.uri;
 }
@@ -400,10 +400,10 @@ async function removeStoredPhoto(uri: string | null) {
           await ImagePicker.requestCameraPermissionsAsync();
 
         if (!permission.granted) {
-        Alert.alert(
+          Alert.alert(
           'Permissão necessária',
-          'Autorize o acesso à câmera nas configurações do celular.'
-        );
+            'Autorize o acesso à câmera nas configurações do celular.',
+          );
           return;
         }
       }
@@ -446,10 +446,10 @@ async function removeStoredPhoto(uri: string | null) {
           await ImagePicker.requestMediaLibraryPermissionsAsync();
 
         if (!permission.granted) {
-        Alert.alert(
+          Alert.alert(
           'Permissão necessária',
-          'Autorize o acesso às fotos nas configurações do celular.'
-        );
+            'Autorize o acesso às fotos nas configurações do celular.',
+          );
           return;
         }
       }
