@@ -3,7 +3,6 @@ import {
   useEffect,
   useState } from 'react';
 import {
-  Alert,
   Pressable,
   StyleSheet,
   Switch,
