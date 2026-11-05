@@ -1,7 +1,13 @@
-import { Alert as NativeAlert, Platform, type AlertButton } from 'react-native';
+import { Alert as NativeAlert, Platform } from 'react-native';
+
+type PlatformAlertButton = {
+  text?: string;
+  onPress?: () => void;
+  style?: 'default' | 'cancel' | 'destructive';
+};
 
 export const Alert = {
-  alert(title: string, message?: string, buttons?: AlertButton[]) {
+  alert(title: string, message?: string, buttons?: PlatformAlertButton[]) {
     if (Platform.OS !== 'web') {
       NativeAlert.alert(title, message, buttons);
       return;
