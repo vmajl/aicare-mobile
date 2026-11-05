@@ -14,6 +14,7 @@ import {
   Platform,
 } from 'react-native';
 import { Alert } from '../../utils/platformAlert';
+import { getPersistablePhotoUri } from '../../utils/photoUri';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -415,10 +416,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
       if (!result.canceled && result.assets?.length) {
         const asset = result.assets[0];
-        const photoUri =
-          Platform.OS === 'web' && asset.base64
-            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-            : asset.uri;
+        const photoUri = await getPersistablePhotoUri(asset);
         setDraftImageUri(photoUri);
       }
     } catch {
@@ -461,10 +459,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
       if (!result.canceled && result.assets?.length) {
         const asset = result.assets[0];
-        const photoUri =
-          Platform.OS === 'web' && asset.base64
-            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-            : asset.uri;
+        const photoUri = await getPersistablePhotoUri(asset);
         setDraftImageUri(photoUri);
       }
     } catch {
