@@ -4,7 +4,6 @@ import {
   Text,
   Pressable,
   StyleSheet,
-  Alert,
   Image,
   TextInput,
   ScrollView,
@@ -14,6 +13,7 @@ import {
   StatusBar,
   Platform,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -39,14 +39,16 @@ const STORAGE_KEY = '@aicare:diary-records';
 const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
 const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
 
-function getPhotoDirectory() {
+function getPhotoDirectory(): Directory | null {
+  if (Platform.OS === 'web') return null;
   return new Directory(Paths.document, 'diary-photos');
 }
 
 function isPermanentPhoto(uri: string | null) {
   if (!uri || Platform.OS === 'web') return false;
 
-  return uri.startsWith(getPhotoDirectory().uri);
+  const directory = getPhotoDirectory();
+  return Boolean(directory && uri.startsWith(directory.uri));
 }
 
 type DiaryRecord = {
@@ -250,6 +252,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   if (Platform.OS === 'web') return null;
 
   const directory = getPhotoDirectory();
+  if (!directory) return null;
 
   directory.create({
     idempotent: true,
@@ -287,7 +290,7 @@ async function removeStoredPhoto(uri: string | null) {
   try {
     const directory = getPhotoDirectory();
 
-    if (!uri.startsWith(directory.uri)) return;
+    if (!directory || !uri.startsWith(directory.uri)) return;
 
     const file = new File(uri);
 
@@ -392,15 +395,17 @@ async function removeStoredPhoto(uri: string | null) {
     }
 
     try {
-      const permission =
-        await ImagePicker.requestCameraPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestCameraPermissionsAsync();
 
-      if (!permission.granted) {
+        if (!permission.granted) {
         Alert.alert(
           'Permissão necessária',
           'Autorize o acesso à câmera nas configurações do celular.'
         );
-        return;
+          return;
+        }
       }
 
       const result = await ImagePicker.launchCameraAsync({
@@ -408,10 +413,16 @@ async function removeStoredPhoto(uri: string | null) {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        setDraftImageUri(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri =
+          Platform.OS === 'web' && asset.base64
+            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
+            : asset.uri;
+        setDraftImageUri(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a câmera.');
@@ -430,15 +441,17 @@ async function removeStoredPhoto(uri: string | null) {
     }
 
     try {
-      const permission =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-      if (!permission.granted) {
+        if (!permission.granted) {
         Alert.alert(
           'Permissão necessária',
           'Autorize o acesso às fotos nas configurações do celular.'
         );
-        return;
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -446,10 +459,16 @@ async function removeStoredPhoto(uri: string | null) {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        setDraftImageUri(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri =
+          Platform.OS === 'web' && asset.base64
+            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
+            : asset.uri;
+        setDraftImageUri(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a galeria.');
