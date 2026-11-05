@@ -10,6 +10,7 @@ import {
   Share,
   ScrollView,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Alert } from '../../utils/platformAlert';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -208,15 +209,25 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   };
 
   const shareInvite = async (invite: Invite) => {
+    const message =
+      `Você foi convidado(a) para participar do AICare!\\n\\n` +
+      `Tipo de acesso: ${invite.role}\\n` +
+      `Código de convite: ${invite.code}\\n\\n` +
+      `Validade: até ${formatDate(invite.expiresAt)}.\\n\\n` +
+      `Utilize esse código no aplicativo AICare para solicitar acesso.`;
+
     try {
-      await Share.share({
-        message:
-          `Você foi convidado(a) para participar do AICare!\n\n` +
-          `Tipo de acesso: ${invite.role}\n` +
-          `Código de convite: ${invite.code}\n\n` +
-          `Validade: até ${formatDate(invite.expiresAt)}.\n\n` +
-          `Utilize esse código no aplicativo AICare para solicitar acesso.`,
-      });
+      if (Platform.OS === 'web') {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(message);
+          Alert.alert('Convite copiado', 'O convite foi copiado para a área de transferência.');
+        } else {
+          window.prompt('Copie o texto do convite:', message);
+        }
+        return;
+      }
+
+      await Share.share({ message });
     } catch {
       Alert.alert('Erro', 'Não foi possível compartilhar o convite.');
     }
