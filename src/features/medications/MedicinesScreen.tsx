@@ -1,7 +1,6 @@
 
 import { useMemo, useState } from 'react';
 import {
-  Alert,
   Platform,
   Pressable,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   View,
   ScrollView,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 import { useRouter } from 'expo-router';
 import {
   Pill,

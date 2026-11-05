@@ -1,7 +1,6 @@
 
 import { useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 import { useRouter } from 'expo-router';
 import { usePatient } from './PatientContext';
 

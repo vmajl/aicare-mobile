@@ -1,7 +1,6 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Alert,
   Pressable,
   StyleSheet,
   Switch,
@@ -9,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 
 import type { Medicine, MedicineDraft } from '../../types/medication';
 

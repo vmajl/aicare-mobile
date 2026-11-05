@@ -4,7 +4,6 @@ import {
   Text,
   Pressable,
   StyleSheet,
-  Alert,
   Image,
   TextInput,
   ScrollView,
@@ -14,6 +13,8 @@ import {
   StatusBar,
   Platform,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
+import { getPersistablePhotoUri } from '../../utils/photoUri';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -39,14 +40,16 @@ const STORAGE_KEY = '@aicare:diary-records';
 const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
 const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
 
-function getPhotoDirectory() {
+function getPhotoDirectory(): Directory | null {
+  if (Platform.OS === 'web') return null;
   return new Directory(Paths.document, 'diary-photos');
 }
 
 function isPermanentPhoto(uri: string | null) {
   if (!uri || Platform.OS === 'web') return false;
 
-  return uri.startsWith(getPhotoDirectory().uri);
+  const directory = getPhotoDirectory();
+  return Boolean(directory && uri.startsWith(directory.uri));
 }
 
 type DiaryRecord = {
@@ -247,57 +250,55 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function ensurePhotoDirectory() {
-  if (Platform.OS === 'web') return null;
+    if (Platform.OS === 'web') return null;
 
-  const directory = getPhotoDirectory();
-
-  directory.create({
-    idempotent: true,
-    intermediates: true,
-  });
-
-  return directory;
-}
-
-async function savePhotoPermanently(
-  temporaryUri: string,
-  recordDate: string
-) {
-  // Na Web, não tenta utilizar o armazenamento nativo do dispositivo.
-  if (Platform.OS === 'web') {
-    return temporaryUri;
-  }
-
-  const directory = await ensurePhotoDirectory();
-
-  if (!directory) return temporaryUri;
-
-  const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
-  const destination = new File(directory, fileName);
-  const source = new File(temporaryUri);
-
-  source.copy(destination);
-
-  return destination.uri;
-}
-
-async function removeStoredPhoto(uri: string | null) {
-  if (!uri || Platform.OS === 'web') return;
-
-  try {
     const directory = getPhotoDirectory();
+    if (!directory) return null;
 
-    if (!uri.startsWith(directory.uri)) return;
+    directory.create({
+      idempotent: true,
+      intermediates: true,
+    });
 
-    const file = new File(uri);
-
-    if (file.exists) {
-      file.delete();
-    }
-  } catch {
-    // Uma falha na exclusão do arquivo não interrompe o Diário.
+    return directory;
   }
-}
+
+  async function savePhotoPermanently(
+    temporaryUri: string,
+    recordDate: string,
+  ) {
+    // Na Web, mantém a imagem em formato persistente no armazenamento local.
+    if (Platform.OS === 'web') {
+      return temporaryUri;
+    }
+
+    const directory = await ensurePhotoDirectory();
+    if (!directory) return temporaryUri;
+
+    const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
+    const destination = new File(directory, fileName);
+    const source = new File(temporaryUri);
+
+    await source.copy(destination);
+
+    return destination.uri;
+  }
+
+  async function removeStoredPhoto(uri: string | null) {
+    if (!uri || Platform.OS === 'web') return;
+
+    try {
+      const directory = getPhotoDirectory();
+      if (!directory || !uri.startsWith(directory.uri)) return;
+
+      const file = new File(uri);
+      if (file.exists) {
+        file.delete();
+      }
+    } catch {
+      // Uma falha na exclusão do arquivo não interrompe o Diário.
+    }
+  }
 
   const calendarDays = useMemo(() => {
     const year = visibleMonth.getFullYear();
@@ -392,15 +393,17 @@ async function removeStoredPhoto(uri: string | null) {
     }
 
     try {
-      const permission =
-        await ImagePicker.requestCameraPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestCameraPermissionsAsync();
 
-      if (!permission.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Autorize o acesso à câmera nas configurações do celular.'
-        );
-        return;
+        if (!permission.granted) {
+          Alert.alert(
+            'Permissão necessária',
+            'Autorize o acesso à câmera nas configurações do celular.',
+          );
+          return;
+        }
       }
 
       const result = await ImagePicker.launchCameraAsync({
@@ -408,10 +411,13 @@ async function removeStoredPhoto(uri: string | null) {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        setDraftImageUri(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri = await getPersistablePhotoUri(asset);
+        setDraftImageUri(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a câmera.');
@@ -430,15 +436,17 @@ async function removeStoredPhoto(uri: string | null) {
     }
 
     try {
-      const permission =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-      if (!permission.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Autorize o acesso às fotos nas configurações do celular.'
-        );
-        return;
+        if (!permission.granted) {
+          Alert.alert(
+            'Permissão necessária',
+            'Autorize o acesso às fotos nas configurações do celular.',
+          );
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -446,10 +454,13 @@ async function removeStoredPhoto(uri: string | null) {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        setDraftImageUri(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri = await getPersistablePhotoUri(asset);
+        setDraftImageUri(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a galeria.');

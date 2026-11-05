@@ -1,4 +1,12 @@
-import { Alert, View, Text, Pressable, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  Platform,
+} from 'react-native';
+import { Alert } from '../../utils/platformAlert';
+import { getPersistablePhotoUri } from '../../utils/photoUri';
 import { useCallback, useState } from 'react';
 import { Camera, Clock, Pill, Plus, Check, RotateCcw } from 'lucide-react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -162,15 +170,17 @@ const refreshTodayPhotoStatus = useCallback(async () => {
 
   async function openCamera() {
     try {
-      const permission =
-        await ImagePicker.requestCameraPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestCameraPermissionsAsync();
 
-      if (!permission.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Autorize o acesso à câmera nas configurações do celular.',
-        );
-        return;
+        if (!permission.granted) {
+          Alert.alert(
+            'Permissão necessária',
+            'Autorize o acesso à câmera nas configurações do celular.',
+          );
+          return;
+        }
       }
 
       const result = await ImagePicker.launchCameraAsync({
@@ -178,10 +188,13 @@ const refreshTodayPhotoStatus = useCallback(async () => {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        await sendPhotoToDiary(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri = await getPersistablePhotoUri(asset);
+        await sendPhotoToDiary(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a câmera.');
@@ -192,15 +205,17 @@ const refreshTodayPhotoStatus = useCallback(async () => {
 
   async function openGallery() {
     try {
-      const permission =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (Platform.OS !== 'web') {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-      if (!permission.granted) {
-        Alert.alert(
-          'Permissão necessária',
-          'Autorize o acesso às fotos nas configurações do celular.',
-        );
-        return;
+        if (!permission.granted) {
+          Alert.alert(
+            'Permissão necessária',
+            'Autorize o acesso às fotos nas configurações do celular.',
+          );
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -208,10 +223,13 @@ const refreshTodayPhotoStatus = useCallback(async () => {
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
+        base64: Platform.OS === 'web',
       });
 
       if (!result.canceled && result.assets?.length) {
-        await sendPhotoToDiary(result.assets[0].uri);
+        const asset = result.assets[0];
+        const photoUri = await getPersistablePhotoUri(asset);
+        await sendPhotoToDiary(photoUri);
       }
     } catch {
       Alert.alert('Erro', 'Não foi possível abrir a galeria.');
