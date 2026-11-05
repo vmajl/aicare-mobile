@@ -1,7 +1,5 @@
 
-import {
-  useMemo,
-  useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Platform,
   Pressable,
