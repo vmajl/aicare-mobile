@@ -249,58 +249,55 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function ensurePhotoDirectory() {
-  if (Platform.OS === 'web') return null;
+    if (Platform.OS === 'web') return null;
 
-  const directory = getPhotoDirectory();
-  if (!directory) return null;
-
-  directory.create({
-    idempotent: true,
-    intermediates: true,
-  });
-
-  return directory;
-}
-
-async function savePhotoPermanently(
-  temporaryUri: string,
-  recordDate: string
-) {
-  // Na Web, não tenta utilizar o armazenamento nativo do dispositivo.
-  if (Platform.OS === 'web') {
-    return temporaryUri;
-  }
-
-  const directory = await ensurePhotoDirectory();
-
-  if (!directory) return temporaryUri;
-
-  const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
-  const destination = new File(directory, fileName);
-  const source = new File(temporaryUri);
-
-  await source.copy(destination);
-
-  return destination.uri;
-}
-
-async function removeStoredPhoto(uri: string | null) {
-  if (!uri || Platform.OS === 'web') return;
-
-  try {
     const directory = getPhotoDirectory();
+    if (!directory) return null;
 
-    if (!directory || !uri.startsWith(directory.uri)) return;
+    directory.create({
+      idempotent: true,
+      intermediates: true,
+    });
 
-    const file = new File(uri);
-
-    if (file.exists) {
-      file.delete();
-    }
-  } catch {
-    // Uma falha na exclusão do arquivo não interrompe o Diário.
+    return directory;
   }
-}
+
+  async function savePhotoPermanently(
+    temporaryUri: string,
+    recordDate: string,
+  ) {
+    // Na Web, mantém a imagem em formato persistente no armazenamento local.
+    if (Platform.OS === 'web') {
+      return temporaryUri;
+    }
+
+    const directory = await ensurePhotoDirectory();
+    if (!directory) return temporaryUri;
+
+    const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
+    const destination = new File(directory, fileName);
+    const source = new File(temporaryUri);
+
+    await source.copy(destination);
+
+    return destination.uri;
+  }
+
+  async function removeStoredPhoto(uri: string | null) {
+    if (!uri || Platform.OS === 'web') return;
+
+    try {
+      const directory = getPhotoDirectory();
+      if (!directory || !uri.startsWith(directory.uri)) return;
+
+      const file = new File(uri);
+      if (file.exists) {
+        file.delete();
+      }
+    } catch {
+      // Uma falha na exclusão do arquivo não interrompe o Diário.
+    }
+  }
 
   const calendarDays = useMemo(() => {
     const year = visibleMonth.getFullYear();
@@ -401,7 +398,7 @@ async function removeStoredPhoto(uri: string | null) {
 
         if (!permission.granted) {
           Alert.alert(
-          'Permissão necessária',
+            'Permissão necessária',
             'Autorize o acesso à câmera nas configurações do celular.',
           );
           return;
@@ -447,7 +444,7 @@ async function removeStoredPhoto(uri: string | null) {
 
         if (!permission.granted) {
           Alert.alert(
-          'Permissão necessária',
+            'Permissão necessária',
             'Autorize o acesso às fotos nas configurações do celular.',
           );
           return;
