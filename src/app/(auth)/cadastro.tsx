@@ -1,8 +1,8 @@
 
-import { useState } from 'react';
+import {
+  useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 import { Link, router } from 'expo-router';
 import { useAuth } from '../../features/auth/AuthContext';
 
