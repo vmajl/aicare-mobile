@@ -6,6 +6,7 @@ import {
   Platform,
 } from 'react-native';
 import { Alert } from '../../utils/platformAlert';
+import { getPersistablePhotoUri } from '../../utils/photoUri';
 import { useCallback, useState } from 'react';
 import { Camera, Clock, Pill, Plus, Check, RotateCcw } from 'lucide-react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -192,10 +193,7 @@ const refreshTodayPhotoStatus = useCallback(async () => {
 
       if (!result.canceled && result.assets?.length) {
         const asset = result.assets[0];
-        const photoUri =
-          Platform.OS === 'web' && asset.base64
-            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-            : asset.uri;
+        const photoUri = await getPersistablePhotoUri(asset);
         await sendPhotoToDiary(photoUri);
       }
     } catch {
@@ -230,10 +228,7 @@ const refreshTodayPhotoStatus = useCallback(async () => {
 
       if (!result.canceled && result.assets?.length) {
         const asset = result.assets[0];
-        const photoUri =
-          Platform.OS === 'web' && asset.base64
-            ? `data:${asset.mimeType ?? 'image/jpeg'};base64,${asset.base64}`
-            : asset.uri;
+        const photoUri = await getPersistablePhotoUri(asset);
         await sendPhotoToDiary(photoUri);
       }
     } catch {
