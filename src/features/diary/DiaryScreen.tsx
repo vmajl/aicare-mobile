@@ -1,5 +1,4 @@
-
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +12,7 @@ import {
   Modal,
   Dimensions,
   StatusBar,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -36,8 +36,18 @@ const DARK = '#102F40';
 const MUTED = '#6D8794';
 const BORDER = '#D8E3E8';
 const STORAGE_KEY = '@aicare:diary-records';
+const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
+const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
 
-const PHOTO_DIRECTORY = new Directory(Paths.document, 'diary-photos');
+function getPhotoDirectory() {
+  return new Directory(Paths.document, 'diary-photos');
+}
+
+function isPermanentPhoto(uri: string | null) {
+  if (!uri || Platform.OS === 'web') return false;
+
+  return uri.startsWith(getPhotoDirectory().uri);
+}
 
 type DiaryRecord = {
   date: string;
@@ -84,6 +94,8 @@ export default function DiaryScreen() {
   const today = new Date();
 
   const [records, setRecords] = useState<DiaryRecord[]>([]);
+  const [todayKey, setTodayKey] = useState(dateKey(today));
+  const [photoDates, setPhotoDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState(dateKey(today));
   const [visibleMonth, setVisibleMonth] = useState(
     new Date(today.getFullYear(), today.getMonth(), 1)
@@ -99,14 +111,58 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   const [isEditing, setIsEditing] = useState(false);
   const [expandedPhoto, setExpandedPhoto] = useState(false);
 
+  // Foto recebida da tela inicial, aguardando ser carregada no compositor.
+  const pendingHomePhotoRef = useRef<{
+    uri: string;
+    date: string;
+  } | null>(null);
+
   useEffect(() => {
     loadRecords();
   }, []);
 
   useEffect(() => {
+    const refreshToday = () => {
+      const nextTodayKey = dateKey(new Date());
+
+      if (nextTodayKey !== todayKey) {
+        setTodayKey(nextTodayKey);
+        setSelectedDate(nextTodayKey);
+        const [year, month] = nextTodayKey.split('-').map(Number);
+        setVisibleMonth(new Date(year, month - 1, 1));
+      }
+    };
+
+    const interval = setInterval(refreshToday, 30_000);
+    return () => clearInterval(interval);
+  }, [todayKey]);
+
+  useEffect(() => {
     const selectedRecord = records.find(
       record => record.date === selectedDate
     );
+
+    const pendingHomePhoto = pendingHomePhotoRef.current;
+
+    if (pendingHomePhoto) {
+      // Garante que a foto enviada pela Home seja associada ao dia atual.
+      if (selectedDate !== pendingHomePhoto.date) {
+        const [year, month, day] = pendingHomePhoto.date
+          .split('-')
+          .map(Number);
+
+        setSelectedDate(pendingHomePhoto.date);
+        setVisibleMonth(new Date(year, month - 1, 1));
+        return;
+      }
+
+      pendingHomePhotoRef.current = null;
+      setObservation(selectedRecord?.observation ?? '');
+      setDraftImageUri(pendingHomePhoto.uri);
+      setIsEditing(true);
+      setExpandedPhoto(false);
+      return;
+    }
 
     setObservation(selectedRecord?.observation ?? '');
     setDraftImageUri(selectedRecord?.imageUri ?? null);
@@ -118,15 +174,21 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     record => record.date === selectedDate
   );
 
+  const selectedDateIsToday = selectedDate === todayKey;
+  const selectedDateHasPhoto =
+    photoDates.includes(selectedDate) || Boolean(selectedRecord?.imageUri);
+  const canAddPhoto = selectedDateIsToday && !selectedDateHasPhoto;
+
   async function loadRecords() {
     try {
       const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      let normalizedRecords: DiaryRecord[] = [];
 
       if (stored) {
         const parsed = JSON.parse(stored);
 
         // Mantém compatibilidade com os registros da versão anterior.
-        const normalizedRecords: DiaryRecord[] = parsed.map(
+        normalizedRecords = parsed.map(
           (record: any) => ({
             date: record.date,
             imageUri: record.imageUri || null,
@@ -135,9 +197,39 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
             updatedAt: record.updatedAt,
           })
         );
-
-        setRecords(normalizedRecords);
       }
+
+      // A lista de datas com foto é reconstruída a partir das publicações
+      // existentes. Assim, uma data deixa de ficar bloqueada quando a
+      // publicação correspondente é excluída.
+      const datesWithExistingPhotos = normalizedRecords
+        .filter(record => Boolean(record.imageUri))
+        .map(record => record.date);
+      const currentPhotoDates = Array.from(new Set(datesWithExistingPhotos));
+      setPhotoDates(currentPhotoDates);
+      await AsyncStorage.setItem(
+        PHOTO_DATES_KEY,
+        JSON.stringify(currentPhotoDates)
+      );
+
+      // Verifica se a Home encaminhou uma foto para o Diário.
+      const pendingPhoto = await AsyncStorage.getItem(
+        PENDING_HOME_PHOTO_KEY
+      );
+
+      if (pendingPhoto) {
+        pendingHomePhotoRef.current = {
+          uri: pendingPhoto,
+          date: dateKey(new Date()),
+        };
+
+        // Remove a transferência temporária para não reutilizar a foto
+        // em uma próxima abertura do Diário.
+        await AsyncStorage.removeItem(PENDING_HOME_PHOTO_KEY);
+      }
+
+      // Atualiza mesmo quando ainda não existem publicações salvas.
+      setRecords(normalizedRecords);
     } catch {
       Alert.alert('Erro', 'Não foi possível carregar o Diário.');
     } finally {
@@ -155,42 +247,57 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function ensurePhotoDirectory() {
-    PHOTO_DIRECTORY.create({
-      idempotent: true,
-      intermediates: true,
-    });
+  if (Platform.OS === 'web') return null;
+
+  const directory = getPhotoDirectory();
+
+  directory.create({
+    idempotent: true,
+    intermediates: true,
+  });
+
+  return directory;
+}
+
+async function savePhotoPermanently(
+  temporaryUri: string,
+  recordDate: string
+) {
+  // Na Web, não tenta utilizar o armazenamento nativo do dispositivo.
+  if (Platform.OS === 'web') {
+    return temporaryUri;
   }
 
-  async function savePhotoPermanently(
-    temporaryUri: string,
-    recordDate: string
-  ) {
-    await ensurePhotoDirectory();
+  const directory = await ensurePhotoDirectory();
 
-    const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
-    const destination = new File(PHOTO_DIRECTORY, fileName);
-    const source = new File(temporaryUri);
+  if (!directory) return temporaryUri;
 
-    source.copy(destination);
+  const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
+  const destination = new File(directory, fileName);
+  const source = new File(temporaryUri);
 
-    return destination.uri;
-  }
+  source.copy(destination);
 
-  async function removeStoredPhoto(uri: string | null) {
-    if (!uri) return;
+  return destination.uri;
+}
 
-    try {
-      if (!uri.startsWith(PHOTO_DIRECTORY.uri)) return;
+async function removeStoredPhoto(uri: string | null) {
+  if (!uri || Platform.OS === 'web') return;
 
-      const file = new File(uri);
+  try {
+    const directory = getPhotoDirectory();
 
-      if (file.exists) {
-        file.delete();
-      }
-    } catch {
-      // Uma falha na exclusão do arquivo não interrompe o Diário.
+    if (!uri.startsWith(directory.uri)) return;
+
+    const file = new File(uri);
+
+    if (file.exists) {
+      file.delete();
     }
+  } catch {
+    // Uma falha na exclusão do arquivo não interrompe o Diário.
   }
+}
 
   const calendarDays = useMemo(() => {
     const year = visibleMonth.getFullYear();
@@ -240,6 +347,22 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function choosePhoto() {
+    if (!selectedDateIsToday) {
+      Alert.alert(
+        'Data indisponível',
+        'Fotos só podem ser adicionadas à publicação da data atual.'
+      );
+      return;
+    }
+
+    if (selectedDateHasPhoto) {
+      Alert.alert(
+        'Foto já registrada hoje',
+        'Você já publicou a foto desta data. Uma nova foto só poderá ser publicada a partir de 00h do próximo dia.'
+      );
+      return;
+    }
+
     Alert.alert(
       'Adicionar foto',
       'Como deseja adicionar uma foto à publicação?',
@@ -258,6 +381,16 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function openCamera() {
+    if (!canAddPhoto) {
+      Alert.alert(
+        'Não é possível adicionar outra foto',
+        selectedDateIsToday
+          ? 'Você já publicou a foto de hoje. Uma nova foto estará disponível a partir de 00h de amanhã.'
+          : 'Só é possível adicionar fotos à data atual.'
+      );
+      return;
+    }
+
     try {
       const permission =
         await ImagePicker.requestCameraPermissionsAsync();
@@ -286,6 +419,16 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function openGallery() {
+    if (!canAddPhoto) {
+      Alert.alert(
+        'Não é possível adicionar outra foto',
+        selectedDateIsToday
+          ? 'Você já publicou a foto de hoje. Uma nova foto estará disponível a partir de 00h de amanhã.'
+          : 'Só é possível adicionar fotos à data atual.'
+      );
+      return;
+    }
+
     try {
       const permission =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -328,19 +471,46 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
       return;
     }
 
+    const previousRecord = records.find(
+      record => record.date === selectedDate
+    );
+    const isAddingNewPhoto = Boolean(
+      draftImageUri && draftImageUri !== previousRecord?.imageUri
+    );
+
+    if (isAddingNewPhoto && !selectedDateIsToday) {
+      Alert.alert(
+        'Data indisponível',
+        'Fotos só podem ser publicadas na data atual.'
+      );
+      return;
+    }
+
+    if (isAddingNewPhoto && (photoDates.includes(selectedDate) || Boolean(previousRecord?.imageUri))) {
+      Alert.alert(
+        'Limite diário atingido',
+        'Você só pode publicar uma foto por dia. Uma nova foto estará disponível a partir de 00h do próximo dia.'
+      );
+      return;
+    }
+
+    if (!previousRecord && !selectedDateIsToday) {
+      Alert.alert(
+        'Data indisponível',
+        'Novas publicações só podem ser criadas para a data atual.'
+      );
+      return;
+    }
+
     try {
       setSaving(true);
-
-      const previousRecord = records.find(
-        record => record.date === selectedDate
-      );
 
       let permanentUri: string | null = draftImageUri;
 
       // Se a foto selecionada for temporária, copia para a pasta permanente.
       if (
         draftImageUri &&
-        !draftImageUri.startsWith(PHOTO_DIRECTORY.uri)
+        !isPermanentPhoto(draftImageUri)
       ) {
         permanentUri = await savePhotoPermanently(
           draftImageUri,
@@ -370,12 +540,29 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
         if (
           permanentUri &&
           permanentUri !== previousRecord?.imageUri &&
-          permanentUri.startsWith(PHOTO_DIRECTORY.uri)
+          isPermanentPhoto(permanentUri)
         ) {
           await removeStoredPhoto(permanentUri);
         }
 
         throw error;
+      }
+
+      if (isAddingNewPhoto) {
+        const updatedPhotoDates = Array.from(
+          new Set([...photoDates, selectedDate])
+        );
+        setPhotoDates(updatedPhotoDates);
+
+        // O próprio registro também funciona como proteção caso esta gravação falhe.
+        try {
+          await AsyncStorage.setItem(
+            PHOTO_DATES_KEY,
+            JSON.stringify(updatedPhotoDates)
+          );
+        } catch {
+          // Na próxima abertura, as datas com fotos serão reconstruídas pelos registros.
+        }
       }
 
       // Só remove a foto anterior depois que a publicação foi salva.
@@ -428,6 +615,18 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
               if (recordToDelete.imageUri) {
                 await removeStoredPhoto(recordToDelete.imageUri);
               }
+
+              // Excluir a publicação também libera a cota de foto do dia.
+              // Isso permite registrar outra foto na mesma data, se ainda for hoje.
+              const updatedPhotoDates = updatedRecords
+                .filter(record => Boolean(record.imageUri))
+                .map(record => record.date);
+              const uniquePhotoDates = Array.from(new Set(updatedPhotoDates));
+              setPhotoDates(uniquePhotoDates);
+              await AsyncStorage.setItem(
+                PHOTO_DATES_KEY,
+                JSON.stringify(uniquePhotoDates)
+              );
 
               setIsEditing(false);
               setExpandedPhoto(false);
@@ -553,22 +752,26 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
                 record => record.date === key
               );
               const isSelected = selectedDate === key;
-              const isToday = key === dateKey(today);
+              const isToday = key === todayKey;
+              const isFutureDate = key > todayKey;
 
               return (
                 <Pressable
                   key={key}
                   onPress={() => selectDay(day)}
+                  disabled={isFutureDate}
                   style={[
                     styles.dayCell,
                     isSelected && styles.selectedDay,
                     isToday && !isSelected && styles.todayDay,
+                    isFutureDate && styles.disabledDay,
                   ]}
                 >
                   <Text
                     style={[
                       styles.dayText,
                       isSelected && styles.selectedDayText,
+                      isFutureDate && styles.disabledDayText,
                     ]}
                   >
                     {day}
@@ -686,6 +889,12 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
                 </Pressable>
               </View>
             </View>
+          ) : !selectedRecord && !selectedDateIsToday ? (
+            <View style={styles.readOnlyNotice}>
+              <Text style={styles.description}>
+                Não há publicação nesta data. Novas publicações e fotos só podem ser adicionadas no dia atual.
+              </Text>
+            </View>
           ) : (
             /* COMPOSITOR DE PUBLICAÇÃO */
             <View style={styles.composer}>
@@ -722,35 +931,41 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
                     resizeMode="cover"
                   />
 
-                  <Pressable
-                    style={styles.removeDraftPhoto}
-                    onPress={removeDraftPhoto}
-                    disabled={saving}
-                    accessibilityRole="button"
-                    accessibilityLabel="Remover foto"
-                  >
-                    <X size={18} color="#FFFFFF" />
-                  </Pressable>
+                  {!(selectedRecord?.imageUri && draftImageUri === selectedRecord.imageUri) && (
+                    <Pressable
+                      style={styles.removeDraftPhoto}
+                      onPress={removeDraftPhoto}
+                      disabled={saving}
+                      accessibilityRole="button"
+                      accessibilityLabel="Remover foto"
+                    >
+                      <X size={18} color="#FFFFFF" />
+                    </Pressable>
+                  )}
                 </View>
               )}
 
               <View style={styles.composerDivider} />
 
               <View style={styles.composerFooter}>
-                <Pressable
-                  style={styles.addPhotoButton}
-                  onPress={choosePhoto}
-                  disabled={saving}
-                >
-                  <ImageIcon size={19} color={BLUE} />
-                  <Text style={styles.addPhotoText}>
-                    {draftImageUri ? 'Trocar foto' : 'Adicionar foto'}
+                {canAddPhoto && !(selectedRecord?.imageUri) ? (
+                  <Pressable
+                    style={styles.addPhotoButton}
+                    onPress={choosePhoto}
+                    disabled={saving}
+                  >
+                    <ImageIcon size={19} color={BLUE} />
+                    <Text style={styles.addPhotoText}>Adicionar foto</Text>
+                  </Pressable>
+                ) : (
+                  <Text style={styles.optionalText}>
+                    {selectedRecord?.imageUri
+                      ? 'A foto desta publicação não pode ser substituída.'
+                      : selectedDateIsToday && selectedDateHasPhoto
+                        ? 'Limite de uma foto por dia atingido.'
+                        : 'Fotos disponíveis somente para a data atual.'}
                   </Text>
-                </Pressable>
-
-                <Text style={styles.optionalText}>
-                  Foto opcional
-                </Text>
+                )}
               </View>
 
               <Pressable
@@ -791,7 +1006,9 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
           {!selectedRecord && !isEditing && (
             <Text style={styles.helperText}>
-              Você pode publicar uma foto, um comentário ou os dois juntos.
+              {selectedDateHasPhoto
+                ? 'A foto desta data já foi publicada. Você pode registrar uma observação, mas não adicionar outra foto.'
+                : 'Você pode publicar uma foto e uma observação por dia. A foto só pode ser adicionada na data atual.'}
             </Text>
           )}
         </View>
@@ -952,6 +1169,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BLUE,
   },
+  disabledDay: {
+    opacity: 0.35,
+  },
+  disabledDayText: {
+    color: '#AAB8BE',
+  },
   photoIndicator: {
     width: 5,
     height: 5,
@@ -987,6 +1210,11 @@ const styles = StyleSheet.create({
   legendText: {
     color: MUTED,
     fontSize: 11,
+  },
+  readOnlyNotice: {
+    backgroundColor: '#F4F8F9',
+    borderRadius: 9,
+    padding: 14,
   },
   recordCard: {
     backgroundColor: '#FFFFFF',

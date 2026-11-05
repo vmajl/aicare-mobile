@@ -1,7 +1,9 @@
-
 import { Alert, View, Text, Pressable, StyleSheet } from 'react-native';
+import { useCallback, useState } from 'react';
 import { Camera, Clock, Pill, Plus, Check, RotateCcw } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 
 import { useMedications } from '../medications/MedicationContext';
 import { usePatient } from '../patients/PatientContext';
@@ -10,9 +12,30 @@ const BLUE = '#50A9C3';
 const DARK = '#102F40';
 const MUTED = '#6D8794';
 const BORDER = '#D8E3E8';
+const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
+
+export const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
+const DIARY_STORAGE_KEY = '@aicare:diary-records';
+
+type DiaryRecord = {
+  date: string;
+  imageUri: string | null;
+};
+
+function getTodayKey() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
 
 export default function HomeScreen() {
   const router = useRouter();
+  const [isPhotoActionRunning, setIsPhotoActionRunning] = useState(false);
+  const [hasTodayPhoto, setHasTodayPhoto] = useState(false);
+  const [photoStatusLoading, setPhotoStatusLoading] = useState(true);
 
   const {
     medicines,
@@ -23,6 +46,61 @@ export default function HomeScreen() {
   } = useMedications();
 
   const { patient, loading: patientLoading } = usePatient();
+
+const refreshTodayPhotoStatus = useCallback(async () => {
+  try {
+    const todayKey = getTodayKey();
+
+    const [storedRecords, storedPhotoDates] = await Promise.all([
+      AsyncStorage.getItem(DIARY_STORAGE_KEY),
+      AsyncStorage.getItem(PHOTO_DATES_KEY),
+    ]);
+
+    const records: DiaryRecord[] = storedRecords
+      ? JSON.parse(storedRecords)
+      : [];
+
+    const photoDates: string[] = storedPhotoDates
+      ? JSON.parse(storedPhotoDates)
+      : [];
+
+    const hasPhotoInRecords =
+      Array.isArray(records) &&
+      records.some(
+        record =>
+          record?.date === todayKey &&
+          Boolean(record?.imageUri)
+      );
+
+    const hasPhotoInDates =
+      Array.isArray(photoDates) &&
+      photoDates.includes(todayKey);
+
+    const alreadyPublished = hasPhotoInRecords || hasPhotoInDates;
+
+    setHasTodayPhoto(alreadyPublished);
+
+    return alreadyPublished;
+  } catch {
+    setHasTodayPhoto(true);
+    return true;
+  } finally {
+    setPhotoStatusLoading(false);
+  }
+}, []);
+  useFocusEffect(
+    useCallback(() => {
+      void refreshTodayPhotoStatus();
+
+      // Atualiza a situação enquanto a Home estiver aberta, inclusive
+      // quando virar o dia à meia-noite sem sair da tela.
+      const interval = setInterval(() => {
+        void refreshTodayPhotoStatus();
+      }, 30_000);
+
+      return () => clearInterval(interval);
+    }, [refreshTodayPhotoStatus]),
+  );
 
   const activeMedicines = medicines.filter(
     (medicine) => medicine.active,
@@ -80,6 +158,118 @@ export default function HomeScreen() {
       default:
         return 'Aguardando horário';
     }
+  }
+
+  async function openCamera() {
+    try {
+      const permission =
+        await ImagePicker.requestCameraPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          'Permissão necessária',
+          'Autorize o acesso à câmera nas configurações do celular.',
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets?.length) {
+        await sendPhotoToDiary(result.assets[0].uri);
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível abrir a câmera.');
+    } finally {
+      setIsPhotoActionRunning(false);
+    }
+  }
+
+  async function openGallery() {
+    try {
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          'Permissão necessária',
+          'Autorize o acesso às fotos nas configurações do celular.',
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets?.length) {
+        await sendPhotoToDiary(result.assets[0].uri);
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível abrir a galeria.');
+    } finally {
+      setIsPhotoActionRunning(false);
+    }
+  }
+
+  async function sendPhotoToDiary(photoUri: string) {
+    try {
+      await AsyncStorage.setItem(PENDING_HOME_PHOTO_KEY, photoUri);
+
+      router.push('/(tabs)/diario');
+    } catch {
+      Alert.alert(
+        'Erro',
+        'Não foi possível encaminhar a foto para o Diário.',
+      );
+    }
+  }
+
+  async function choosePhoto() {
+    const alreadyPublished = await refreshTodayPhotoStatus();
+
+    if (alreadyPublished) {
+      Alert.alert(
+        'Registro já realizado',
+        'A foto de hoje já foi publicada no Diário. Você poderá registrar outra a partir da meia-noite ou depois de excluir a publicação atual.',
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Registrar foto',
+      'Como deseja adicionar uma foto à publicação?',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel',
+        },
+        {
+          text: 'Tirar foto',
+          onPress: () => {
+            if (isPhotoActionRunning) return;
+            setIsPhotoActionRunning(true);
+            void openCamera();
+          },
+        },
+        {
+          text: 'Escolher da galeria',
+          onPress: () => {
+            if (isPhotoActionRunning) return;
+            setIsPhotoActionRunning(true);
+            void openGallery();
+          },
+        },
+      ],
+    );
   }
 
   return (
@@ -154,25 +344,37 @@ export default function HomeScreen() {
 
             <Text style={styles.description}>
               {patient
-                ? `Adicione uma foto de ${patient.name} ao diário compartilhado.`
+                ? `Adicione uma foto de ${patient.name} ao diário compartilhado. É permitida uma foto por dia, com liberação à meia-noite.`
                 : 'Cadastre um paciente para começar o acompanhamento.'}
             </Text>
           </View>
         </View>
 
         <Pressable
-          onPress={() =>
-            Alert.alert(
-              'Registro de foto',
-              'A seleção de fotos será implementada em uma próxima etapa.',
-            )
-          }
-          style={styles.photoButton}
+          onPress={() => {
+            void choosePhoto();
+          }}
+          disabled={isPhotoActionRunning || photoStatusLoading || hasTodayPhoto}
+          style={[
+            styles.photoButton,
+            (isPhotoActionRunning || photoStatusLoading || hasTodayPhoto) &&
+              styles.photoButtonDisabled,
+          ]}
         >
-          <Camera size={18} color="#FFFFFF" />
+          {hasTodayPhoto ? (
+            <Check size={18} color="#FFFFFF" />
+          ) : (
+            <Camera size={18} color="#FFFFFF" />
+          )}
 
           <Text style={styles.photoButtonText}>
-            Registrar foto
+            {photoStatusLoading
+              ? 'Verificando registro...'
+              : hasTodayPhoto
+                ? 'Registro de hoje já realizado'
+                : isPhotoActionRunning
+                  ? 'Abrindo câmera/galeria...'
+                  : 'Registrar foto'}
           </Text>
         </Pressable>
       </View>
@@ -451,6 +653,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     marginTop: 5,
+  },
+  photoButtonDisabled: {
+    opacity: 0.6,
   },
   photoButtonText: {
     color: '#FFFFFF',
