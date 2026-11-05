@@ -7,11 +7,11 @@ import {
   Pressable,
   Modal,
   TextInput,
-  Alert,
   Share,
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { Alert } from '../../utils/platformAlert';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../auth/AuthContext';
 import { router } from 'expo-router';
