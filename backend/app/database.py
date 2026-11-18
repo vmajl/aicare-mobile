@@ -32,6 +32,21 @@ class Base(DeclarativeBase):
     pass
 
 
+def adicionar_colunas_ausentes(tabela: str, colunas: dict[str, str]) -> None:
+    """Migração simples para SQLite: adiciona colunas novas em tabelas
+    já existentes (o create_all não altera tabelas criadas antes)."""
+    with engine.begin() as conexao:
+        existentes = {
+            linha[1]
+            for linha in conexao.exec_driver_sql(f"PRAGMA table_info({tabela})")
+        }
+        for nome, definicao in colunas.items():
+            if nome not in existentes:
+                conexao.exec_driver_sql(
+                    f"ALTER TABLE {tabela} ADD COLUMN {nome} {definicao}"
+                )
+
+
 def get_db():
     db = SessionLocal()
     try:

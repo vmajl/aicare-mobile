@@ -84,7 +84,8 @@ export default function CadastroScreen() {
         name: name.trim(),
         email: email.trim(),
         password,
-        inviteCode: mode === 'invite' ? inviteCode.trim().toUpperCase() : undefined,
+        // O código é um token JWT: não alterar maiúsculas/minúsculas.
+        inviteCode: mode === 'invite' ? inviteCode.replace(/\s/g, '') : undefined,
       });
 
       Alert.alert(
@@ -285,19 +286,22 @@ export default function CadastroScreen() {
                   <Text style={styles.label}>Código de convite</Text>
 
                   <TextInput
-                    style={styles.input}
-                    placeholder="Ex.: AIC-ABC123"
+                    style={[styles.input, styles.inviteInput]}
+                    placeholder="Cole aqui o código recebido"
                     placeholderTextColor="#9AAEB7"
                     value={inviteCode}
                     onChangeText={setInviteCode}
-                    autoCapitalize="characters"
+                    autoCapitalize="none"
                     autoCorrect={false}
+                    multiline
+                    textAlignVertical="top"
                     editable={!loading}
                   />
 
                   <Text style={styles.helperText}>
-                    O código deve ter sido fornecido pela pessoa que
-                    administra o acompanhamento.
+                    O código é enviado pela pessoa que administra o
+                    acompanhamento. Copie a mensagem recebida e cole o
+                    código completo aqui.
                   </Text>
                 </>
               )}
@@ -524,6 +528,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 15,
     backgroundColor: '#FFFFFF',
+  },
+  inviteInput: {
+    height: 96,
+    paddingTop: 12,
+    fontSize: 12,
   },
   helperText: {
     color: MUTED,

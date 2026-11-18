@@ -15,20 +15,14 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { useMedications } from '../medications/MedicationContext';
 import { usePatient } from '../patients/PatientContext';
+import { listDiaryRecords } from '../diary/diaryApi';
 
 const BLUE = '#50A9C3';
 const DARK = '#102F40';
 const MUTED = '#6D8794';
 const BORDER = '#D8E3E8';
-const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
 
 export const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
-const DIARY_STORAGE_KEY = '@aicare:diary-records';
-
-type DiaryRecord = {
-  date: string;
-  imageUri: string | null;
-};
 
 function getTodayKey() {
   const today = new Date();
@@ -55,36 +49,25 @@ export default function HomeScreen() {
 
   const { patient, loading: patientLoading } = usePatient();
 
+  const patientId = patient?.id ?? null;
+
 const refreshTodayPhotoStatus = useCallback(async () => {
   try {
+    if (!patientId) {
+      setHasTodayPhoto(false);
+      return false;
+    }
+
     const todayKey = getTodayKey();
 
-    const [storedRecords, storedPhotoDates] = await Promise.all([
-      AsyncStorage.getItem(DIARY_STORAGE_KEY),
-      AsyncStorage.getItem(PHOTO_DATES_KEY),
-    ]);
+    const records = await listDiaryRecords(patientId, {
+      from: todayKey,
+      to: todayKey,
+    });
 
-    const records: DiaryRecord[] = storedRecords
-      ? JSON.parse(storedRecords)
-      : [];
-
-    const photoDates: string[] = storedPhotoDates
-      ? JSON.parse(storedPhotoDates)
-      : [];
-
-    const hasPhotoInRecords =
-      Array.isArray(records) &&
-      records.some(
-        record =>
-          record?.date === todayKey &&
-          Boolean(record?.imageUri)
-      );
-
-    const hasPhotoInDates =
-      Array.isArray(photoDates) &&
-      photoDates.includes(todayKey);
-
-    const alreadyPublished = hasPhotoInRecords || hasPhotoInDates;
+    const alreadyPublished = records.some(record =>
+      Boolean(record.imageUri)
+    );
 
     setHasTodayPhoto(alreadyPublished);
 
@@ -95,7 +78,7 @@ const refreshTodayPhotoStatus = useCallback(async () => {
   } finally {
     setPhotoStatusLoading(false);
   }
-}, []);
+}, [patientId]);
   useFocusEffect(
     useCallback(() => {
       void refreshTodayPhotoStatus();
@@ -138,10 +121,12 @@ const refreshTodayPhotoStatus = useCallback(async () => {
   async function handleAdminister(doseId: string) {
     try {
       await administerDose(doseId);
-    } catch {
+    } catch (error) {
       Alert.alert(
         'Erro',
-        'Não foi possível registrar a administração. Tente novamente.',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível registrar a administração. Tente novamente.',
       );
     }
   }
@@ -149,10 +134,12 @@ const refreshTodayPhotoStatus = useCallback(async () => {
   async function handleUndo(doseId: string) {
     try {
       await undoDose(doseId);
-    } catch {
+    } catch (error) {
       Alert.alert(
         'Erro',
-        'Não foi possível desfazer o registro. Tente novamente.',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível desfazer o registro. Tente novamente.',
       );
     }
   }

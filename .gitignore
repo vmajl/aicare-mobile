@@ -40,3 +40,7 @@ Thumbs.db
 # Pastas nativas geradas
 /ios
 /android
+
+# Ambiente local
+.venv/
+.vscode/

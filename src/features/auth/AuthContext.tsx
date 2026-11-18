@@ -8,26 +8,40 @@ import React, {
   type ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  ApiError,
+  apiRequest,
+  setAuthToken,
+  setUnauthorizedHandler,
+} from '../../services/apiClient';
+
 // ======================================================
 // TIPOS
 // ======================================================
 
-export type UserRole = 'Familiar' | 'Administrador';
+/** Perfis definidos pela API (backend/app/models.py). */
+export type UserRole = 'family_admin' | 'family' | 'caregiver';
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  family_admin: 'Administrador',
+  family: 'Familiar',
+  caregiver: 'Cuidador',
+};
 
 export type AppUser = {
   id: string;
   name: string;
   email: string;
-  password: string;
   role: UserRole;
+  /** Agrupa os dados locais (medicamentos, diário) da família. */
   familyId: string;
-  inviteCode?: string;
 };
 
 export type RegisterData = {
   name: string;
   email: string;
   password: string;
+  /** Token JWT de convite recebido do familiar administrador. */
   inviteCode?: string;
 };
 
@@ -39,37 +53,32 @@ type AuthContextData = {
   logout: () => Promise<void>;
 };
 
-type StoredInvite = {
-  id: string;
-  code: string;
+type ApiUser = {
+  id: number;
+  name: string;
+  email: string;
   role: UserRole;
-  createdAt: string;
-  expiresAt: string;
-  status: string;
-  name?: string;
-  familyId?: string;
+  active: boolean;
+  created_at: string;
+  family_id: number | null;
 };
 
-type StoredFamily = {
-  id: string;
-  name: string;
-  createdAt: string;
-  ownerId: string;
+type TokenResponse = {
+  access_token: string;
+  token_type: string;
+  user: ApiUser;
+};
+
+type StoredSession = {
+  token: string;
+  user: AppUser;
 };
 
 // ======================================================
 // ARMAZENAMENTO
 // ======================================================
 
-const USERS_KEY = '@aicare:demo-users';
-const SESSION_KEY = '@aicare:demo-session';
-const INVITES_KEY = '@aicare:people-invites';
-const ACCEPTED_CODES_KEY = '@aicare:accepted-invite-codes';
-const FAMILIES_KEY = '@aicare:demo-families';
-
-// Compatibilidade com contas antigas que ainda não possuem
-// um familyId salvo.
-const LEGACY_FAMILY_ID = 'aicare-legacy-family';
+const SESSION_KEY = '@aicare:api-session';
 
 // ======================================================
 // CONTEXTO
@@ -87,32 +96,13 @@ const normalizeEmail = (email: string) => {
   return email.trim().toLowerCase();
 };
 
-const generateId = (prefix: string) => {
-  return `${prefix}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 9)}`;
-};
-
-const normalizeInviteStatus = (status: string) => {
-  return status.trim().toLowerCase();
-};
-
-const isInviteAvailable = (invite: StoredInvite) => {
-  const status = normalizeInviteStatus(invite.status);
-
-  const unavailableStatuses = [
-    'revogado',
-    'revoked',
-    'accepted',
-    'aceito',
-    'utilizado',
-    'used',
-  ];
-
-  const expired = new Date(invite.expiresAt).getTime() < Date.now();
-
-  return !unavailableStatuses.includes(status) && !expired;
-};
+const toAppUser = (apiUser: ApiUser): AppUser => ({
+  id: String(apiUser.id),
+  name: apiUser.name,
+  email: apiUser.email,
+  role: apiUser.role,
+  familyId: `family-${apiUser.family_id ?? apiUser.id}`,
+});
 
 // ======================================================
 // PROVIDER
@@ -125,6 +115,35 @@ type AuthProviderProps = {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const clearSession = useCallback(async () => {
+    setAuthToken(null);
+    setUser(null);
+    await AsyncStorage.removeItem(SESSION_KEY);
+  }, []);
+
+  const saveSession = useCallback(async (data: TokenResponse) => {
+    const appUser = toAppUser(data.user);
+    const session: StoredSession = {
+      token: data.access_token,
+      user: appUser,
+    };
+
+    setAuthToken(data.access_token);
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    setUser(appUser);
+
+    return appUser;
+  }, []);
+
+  // Token expirado ou inválido em qualquer requisição: encerra a sessão.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      void clearSession();
+    });
+
+    return () => setUnauthorizedHandler(null);
+  }, [clearSession]);
 
   // ----------------------------------------------------
   // RESTAURAR SESSÃO
@@ -140,31 +159,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return;
         }
 
-        const savedSession: AppUser = JSON.parse(sessionData);
+        const savedSession: StoredSession = JSON.parse(sessionData);
 
-        // Compatibilidade com usuários cadastrados anteriormente.
-        const restoredUser: AppUser = {
-          ...savedSession,
-          familyId: savedSession.familyId || LEGACY_FAMILY_ID,
-        };
+        setAuthToken(savedSession.token);
+        setUser(savedSession.user);
 
-        setUser(restoredUser);
+        // Confirma o token e atualiza os dados do usuário.
+        try {
+          const apiUser = await apiRequest<ApiUser>('/auth/me');
+          const refreshedUser = toAppUser(apiUser);
 
-        // Atualiza a sessão antiga com o familyId.
-        await AsyncStorage.setItem(
-          SESSION_KEY,
-          JSON.stringify(restoredUser),
-        );
+          setUser(refreshedUser);
+          await AsyncStorage.setItem(
+            SESSION_KEY,
+            JSON.stringify({ ...savedSession, user: refreshedUser }),
+          );
+        } catch (error) {
+          // Sem conexão: mantém a sessão salva. Token recusado: sai.
+          if (error instanceof ApiError && error.status === 401) {
+            await clearSession();
+          }
+        }
       } catch (error) {
         console.error('Erro ao restaurar sessão:', error);
-        setUser(null);
+        await clearSession();
       } finally {
         setLoading(false);
       }
     };
 
-    restoreSession();
-  }, []);
+    void restoreSession();
+  }, [clearSession]);
 
   // ----------------------------------------------------
   // LOGIN
@@ -178,46 +203,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('Informe o e-mail e a senha.');
       }
 
-      const storedUsers = await AsyncStorage.getItem(USERS_KEY);
-      const users: AppUser[] = storedUsers
-        ? JSON.parse(storedUsers)
-        : [];
+      const data = await apiRequest<TokenResponse>('/auth/login', {
+        method: 'POST',
+        form: { username: normalizedEmail, password },
+        auth: false,
+      });
 
-      const foundUser = users.find(
-        (item) =>
-          normalizeEmail(item.email) === normalizedEmail &&
-          item.password === password,
-      );
-
-      if (!foundUser) {
-        throw new Error('E-mail ou senha incorretos.');
-      }
-
-      const authenticatedUser: AppUser = {
-        ...foundUser,
-        familyId: foundUser.familyId || LEGACY_FAMILY_ID,
-      };
-
-      // Atualiza o cadastro antigo caso ainda não tenha familyId.
-      const updatedUsers = users.map((item) =>
-        item.id === authenticatedUser.id
-          ? authenticatedUser
-          : item,
-      );
-
-      await AsyncStorage.setItem(
-        USERS_KEY,
-        JSON.stringify(updatedUsers),
-      );
-
-      await AsyncStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify(authenticatedUser),
-      );
-
-      setUser(authenticatedUser);
+      await saveSession(data);
     },
-    [],
+    [saveSession],
   );
 
   // ----------------------------------------------------
@@ -229,7 +223,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const name = data.name.trim();
       const email = normalizeEmail(data.email);
       const password = data.password;
-      const inviteCode = data.inviteCode?.trim().toUpperCase();
+      const inviteToken = data.inviteCode?.trim();
 
       if (!name || !email || !password) {
         throw new Error('Preencha todos os campos obrigatórios.');
@@ -239,171 +233,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('A senha deve ter pelo menos 6 caracteres.');
       }
 
-      const storedUsers = await AsyncStorage.getItem(USERS_KEY);
-      const users: AppUser[] = storedUsers
-        ? JSON.parse(storedUsers)
-        : [];
+      // FLUXO 1: novo acompanhamento (familiar administrador).
+      // FLUXO 2: cadastro por convite (cuidador ou familiar).
+      const response = inviteToken
+        ? await apiRequest<TokenResponse>('/auth/register/invite', {
+            method: 'POST',
+            body: { name, email, password, invite_token: inviteToken },
+            auth: false,
+          })
+        : await apiRequest<TokenResponse>('/auth/register', {
+            method: 'POST',
+            body: { name, email, password },
+            auth: false,
+          });
 
-      const emailAlreadyExists = users.some(
-        (item) => normalizeEmail(item.email) === email,
-      );
-
-      if (emailAlreadyExists) {
-        throw new Error('Já existe uma conta cadastrada com esse e-mail.');
-      }
-
-      let role: UserRole = 'Administrador';
-      let familyId = '';
-      let acceptedInviteCode: string | undefined;
-
-      // ==================================================
-      // FLUXO 1: NOVO ACOMPANHAMENTO
-      // ==================================================
-
-      if (!inviteCode) {
-        familyId = generateId('family');
-        role = 'Administrador';
-
-        const storedFamilies = await AsyncStorage.getItem(FAMILIES_KEY);
-        const families: StoredFamily[] = storedFamilies
-          ? JSON.parse(storedFamilies)
-          : [];
-
-        const newUserId = generateId('user');
-
-        const newFamily: StoredFamily = {
-          id: familyId,
-          name: `Acompanhamento de ${name}`,
-          createdAt: new Date().toISOString(),
-          ownerId: newUserId,
-        };
-
-        const newUser: AppUser = {
-          id: newUserId,
-          name,
-          email,
-          password,
-          role,
-          familyId,
-        };
-
-        // Salva o acompanhamento e o primeiro administrador.
-        await AsyncStorage.setItem(
-          FAMILIES_KEY,
-          JSON.stringify([...families, newFamily]),
-        );
-
-        await AsyncStorage.setItem(
-          USERS_KEY,
-          JSON.stringify([...users, newUser]),
-        );
-
-        await AsyncStorage.setItem(
-          SESSION_KEY,
-          JSON.stringify(newUser),
-        );
-
-        setUser(newUser);
-
-        return newUser;
-      }
-
-      // ==================================================
-      // FLUXO 2: ENTRAR COM CÓDIGO DE CONVITE
-      // ==================================================
-
-      const storedInvites = await AsyncStorage.getItem(INVITES_KEY);
-      const invites: StoredInvite[] = storedInvites
-        ? JSON.parse(storedInvites)
-        : [];
-
-      const storedAcceptedCodes = await AsyncStorage.getItem(
-        ACCEPTED_CODES_KEY,
-      );
-
-      const acceptedCodes: string[] = storedAcceptedCodes
-        ? JSON.parse(storedAcceptedCodes)
-        : [];
-
-      const codeAlreadyUsed = acceptedCodes.some(
-        (code) => code.toUpperCase() === inviteCode,
-      );
-
-      if (codeAlreadyUsed) {
-        throw new Error('Este código de convite já foi utilizado.');
-      }
-
-      const inviteIndex = invites.findIndex(
-        (item) => item.code.toUpperCase() === inviteCode,
-      );
-
-      if (inviteIndex === -1) {
-        throw new Error('Código de convite não encontrado.');
-      }
-
-      const invite = invites[inviteIndex];
-
-      if (!isInviteAvailable(invite)) {
-        throw new Error(
-          'Este convite foi revogado, utilizado ou está expirado.',
-        );
-      }
-
-      if (
-        invite.role !== 'Familiar' &&
-        invite.role !== 'Administrador'
-      ) {
-        throw new Error('O convite possui um tipo de acesso inválido.');
-      }
-
-      // Convites antigos, sem familyId, pertencem ao ambiente legado.
-      familyId = invite.familyId || LEGACY_FAMILY_ID;
-      role = invite.role;
-      acceptedInviteCode = invite.code;
-
-      const newUser: AppUser = {
-        id: generateId('user'),
-        name,
-        email,
-        password,
-        role,
-        familyId,
-        inviteCode: acceptedInviteCode,
-      };
-
-      // Marca o convite como utilizado.
-      const updatedInvites = [...invites];
-
-      updatedInvites[inviteIndex] = {
-        ...invite,
-        status: 'accepted',
-      };
-
-      await AsyncStorage.setItem(
-        INVITES_KEY,
-        JSON.stringify(updatedInvites),
-      );
-
-      await AsyncStorage.setItem(
-        ACCEPTED_CODES_KEY,
-        JSON.stringify([...acceptedCodes, acceptedInviteCode]),
-      );
-
-      await AsyncStorage.setItem(
-        USERS_KEY,
-        JSON.stringify([...users, newUser]),
-      );
-
-      await AsyncStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify(newUser),
-      );
-
-      setUser(newUser);
-
-      return newUser;
+      return saveSession(response);
     },
-    [],
+    [saveSession],
   );
 
   // ----------------------------------------------------
@@ -411,9 +257,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // ----------------------------------------------------
 
   const logout = useCallback(async () => {
-    await AsyncStorage.removeItem(SESSION_KEY);
-    setUser(null);
-  }, []);
+    await clearSession();
+  }, [clearSession]);
 
   // ----------------------------------------------------
   // VALOR DO CONTEXTO
