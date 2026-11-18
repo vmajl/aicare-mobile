@@ -32,7 +32,10 @@ export type MedicineDraft = {
 };
 
 export type DoseRecord = {
+  /** Medicamento + horário previsto (usado para casar com as doses do dia). */
   id: string;
+  /** Id do registro na API. */
+  apiId?: number;
   medicineId: string;
   scheduledAt: string;
   administeredAt: string;

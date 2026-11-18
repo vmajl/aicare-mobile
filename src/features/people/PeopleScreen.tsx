@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,10 +13,10 @@ import {
   Platform,
 } from 'react-native';
 import { Alert } from '../../utils/platformAlert';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '../auth/AuthContext';
+import { ROLE_LABELS, useAuth } from '../auth/AuthContext';
 import { router } from 'expo-router';
 import { usePatient } from '../patients/PatientContext';
+import { apiRequest, parseApiDate } from '../../services/apiClient';
 
 const BLUE = '#50A9C3';
 const DARK = '#102F40';
@@ -24,100 +24,94 @@ const MUTED = '#6D8794';
 const BORDER = '#D8E3E8';
 const PALE_BLUE = '#E8F6FA';
 
-const STORAGE_KEY = '@aicare:people-invites';
-const LEGACY_FAMILY_ID = 'aicare-legacy-family';
+const INVITE_EXPIRATION_DAYS = 7;
 
-type InviteRole = 'Familiar' | 'Administrador';
-
-type InviteStatus =
-  | 'Pendente'
-  | 'Revogado'
-  | 'accepted'
-  | 'aceito'
-  | 'utilizado'
-  | 'used';
+/** Perfis que podem ser convidados (definidos pela API). */
+type InviteRole = 'caregiver' | 'family';
 
 type Invite = {
-  id: string;
-  code: string;
+  id: number;
+  patient_id: number;
   role: InviteRole;
-  createdAt: string;
-  expiresAt: string;
-  status: InviteStatus;
-  name: string;
-  familyId?: string;
+  name: string | null;
+  email: string | null;
+  expires_at: string;
+  used_at: string | null;
+  revoked: boolean;
+  created_at: string;
+  invite_token: string;
 };
 
-const generateCode = () => {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = 'AIC-';
-
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return code;
-};
+type InviteStatus = 'Pendente' | 'Expirado' | 'Utilizado' | 'Revogado';
 
 const formatDate = (date: string) => {
-  return new Date(date).toLocaleDateString('pt-BR');
+  return parseApiDate(date).toLocaleDateString('pt-BR');
 };
 
 const isExpired = (date: string) => {
-  return new Date(date).getTime() < Date.now();
+  return parseApiDate(date).getTime() < Date.now();
 };
 
-const normalizeStatus = (status: string) =>
-  status.trim().toLowerCase();
+const getInviteStatus = (invite: Invite): InviteStatus => {
+  if (invite.revoked) return 'Revogado';
+  if (invite.used_at) return 'Utilizado';
+  if (isExpired(invite.expires_at)) return 'Expirado';
+  return 'Pendente';
+};
+
+// O token JWT é longo: exibe só o início e o fim no cartão.
+const shortToken = (token: string) =>
+  token.length > 24 ? `${token.slice(0, 12)}…${token.slice(-8)}` : token;
 
 export default function PeopleScreen() {
   const { user, logout } = useAuth();
+  const { patient, loading: patientLoading, canEdit } = usePatient();
 
-  // Mantém todos os convites armazenados, mas exibe apenas
-  // os convites pertencentes à família da conta conectada.
   const [invites, setInvites] = useState<Invite[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedRole, setSelectedRole] =
-    useState<InviteRole>('Familiar');
+    useState<InviteRole>('caregiver');
   const [inviteName, setInviteName] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const currentFamilyId = user?.familyId ?? LEGACY_FAMILY_ID;
+  // Somente o familiar administrador do paciente gerencia convites.
+  const canManageInvites =
+    user?.role === 'family_admin' &&
+    patient?.accessRole === 'family_admin';
 
-  useEffect(() => {
-    loadInvites();
-  }, []);
+  const patientId = patient?.id;
 
-  const loadInvites = async () => {
+  const loadInvites = useCallback(async () => {
+    if (!patientId || !canManageInvites) {
+      setInvites([]);
+      return;
+    }
+
+    setLoading(true);
+
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
-
-      if (stored) {
-        const parsed: Invite[] = JSON.parse(stored);
-        setInvites(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setInvites([]);
-      }
-    } catch {
-      Alert.alert('Erro', 'Não foi possível carregar os convites.');
+      const data = await apiRequest<Invite[]>(
+        `/patients/${patientId}/invites`,
+      );
+      setInvites(data);
+    } catch (error) {
+      Alert.alert(
+        'Erro',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível carregar os convites.',
+      );
     } finally {
       setLoading(false);
     }
-  };
-const { patient, loading: patientLoading } = usePatient();
+  }, [patientId, canManageInvites]);
 
-const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
-  const saveInvites = async (updated: Invite[]) => {
-    // Salva a lista completa para preservar convites de outras famílias.
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    setInvites(updated);
-  };
+  useEffect(() => {
+    void loadInvites();
+  }, [loadInvites]);
 
-  const familyInvites = invites.filter(
-    (invite) =>
-      (invite.familyId ?? LEGACY_FAMILY_ID) === currentFamilyId,
-  );
+  const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
   const handleLogout = () => {
     Alert.alert(
@@ -147,52 +141,48 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     );
   };
 
-  const createInvite = async () => {
-    if (saving) return;
-
-    if (!user?.familyId) {
+  const openInviteModal = () => {
+    if (!patient) {
       Alert.alert(
-        'Acompanhamento não identificado',
-        'Não foi possível identificar a família desta conta. Entre novamente no aplicativo.',
+        'Cadastre o paciente',
+        'Antes de convidar pessoas, cadastre quem será acompanhado.',
       );
       return;
     }
 
+    setModalVisible(true);
+  };
+
+  const closeInviteModal = () => {
+    setModalVisible(false);
+    setInviteName('');
+    setSelectedRole('caregiver');
+  };
+
+  const createInvite = async () => {
+    if (saving || !patientId) return;
+
     setSaving(true);
 
     try {
-      let code = generateCode();
+      const newInvite = await apiRequest<Invite>(
+        `/patients/${patientId}/invites`,
+        {
+          method: 'POST',
+          body: {
+            role: selectedRole,
+            name: inviteName.trim() || null,
+            expires_in_hours: INVITE_EXPIRATION_DAYS * 24,
+          },
+        },
+      );
 
-      while (invites.some((invite) => invite.code === code)) {
-        code = generateCode();
-      }
-
-      const now = new Date();
-      const expiration = new Date();
-      expiration.setDate(expiration.getDate() + 7);
-
-      const newInvite: Invite = {
-        id: `${Date.now()}`,
-        code,
-        role: selectedRole,
-        name: inviteName.trim(),
-        createdAt: now.toISOString(),
-        expiresAt: expiration.toISOString(),
-        status: 'Pendente',
-
-        // Vincula o convite à família que o criou.
-        familyId: user.familyId,
-      };
-
-      await saveInvites([newInvite, ...invites]);
-
-      setModalVisible(false);
-      setInviteName('');
-      setSelectedRole('Familiar');
+      setInvites((current) => [newInvite, ...current]);
+      closeInviteModal();
 
       Alert.alert(
         'Convite criado',
-        `Código: ${code}\n\nCompartilhe esse código com a pessoa convidada.`,
+        'Compartilhe o código de convite com a pessoa convidada. Ele só pode ser usado uma vez.',
         [
           { text: 'Fechar' },
           {
@@ -201,8 +191,13 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
           },
         ],
       );
-    } catch {
-      Alert.alert('Erro', 'Não foi possível criar o convite.');
+    } catch (error) {
+      Alert.alert(
+        'Erro',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível criar o convite.',
+      );
     } finally {
       setSaving(false);
     }
@@ -211,10 +206,10 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   const shareInvite = async (invite: Invite) => {
     const message =
       `Você foi convidado(a) para participar do AICare!\n\n` +
-      `Tipo de acesso: ${invite.role}\n` +
-      `Código de convite: ${invite.code}\n\n` +
-      `Validade: até ${formatDate(invite.expiresAt)}.\n\n` +
-      `Utilize esse código no aplicativo AICare para solicitar acesso.`;
+      `Tipo de acesso: ${ROLE_LABELS[invite.role]}\n` +
+      `Validade: até ${formatDate(invite.expires_at)}.\n\n` +
+      `No aplicativo AICare, escolha "Tenho um código de convite" e cole o código abaixo:\n\n` +
+      `${invite.invite_token}`;
 
     try {
       if (Platform.OS === 'web') {
@@ -234,25 +229,35 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   };
 
   const revokeInvite = (invite: Invite) => {
+    const target = invite.name ? `o convite de ${invite.name}` : 'este convite';
+
     Alert.alert(
       'Revogar convite',
-      `Deseja realmente revogar o código ${invite.code}? Ele não deverá mais ser utilizado.`,
+      `Deseja realmente revogar ${target}? Ele não poderá mais ser utilizado.`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Revogar',
           style: 'destructive',
           onPress: async () => {
-            const updated = invites.map((item) =>
-              item.id === invite.id
-                ? { ...item, status: 'Revogado' as const }
-                : item,
-            );
-
             try {
-              await saveInvites(updated);
-            } catch {
-              Alert.alert('Erro', 'Não foi possível revogar o convite.');
+              await apiRequest<void>(
+                `/patients/${invite.patient_id}/invites/${invite.id}`,
+                { method: 'DELETE' },
+              );
+
+              setInvites((current) =>
+                current.map((item) =>
+                  item.id === invite.id ? { ...item, revoked: true } : item,
+                ),
+              );
+            } catch (error) {
+              Alert.alert(
+                'Erro',
+                error instanceof Error
+                  ? error.message
+                  : 'Não foi possível revogar o convite.',
+              );
             }
           },
         },
@@ -260,54 +265,35 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     );
   };
 
-  const pendingInvites = familyInvites.filter(
-    (invite) =>
-      normalizeStatus(invite.status) === 'pendente' &&
-      !isExpired(invite.expiresAt),
+  const pendingInvites = invites.filter(
+    (invite) => getInviteStatus(invite) === 'Pendente',
   );
 
-  const expiredInvites = familyInvites.filter(
-    (invite) =>
-      normalizeStatus(invite.status) === 'pendente' &&
-      isExpired(invite.expiresAt),
+  const expiredInvites = invites.filter(
+    (invite) => getInviteStatus(invite) === 'Expirado',
   );
 
-  const revokedInvites = familyInvites.filter(
-    (invite) => normalizeStatus(invite.status) === 'revogado',
+  const revokedInvites = invites.filter(
+    (invite) => getInviteStatus(invite) === 'Revogado',
   );
 
-  const acceptedInvites = familyInvites.filter((invite) =>
-    ['accepted', 'aceito', 'utilizado', 'used'].includes(
-      normalizeStatus(invite.status),
-    ),
+  const acceptedInvites = invites.filter(
+    (invite) => getInviteStatus(invite) === 'Utilizado',
   );
 
   const renderInvite = (invite: Invite) => {
-    const expired = isExpired(invite.expiresAt);
-    const status = normalizeStatus(invite.status);
+    const displayedStatus = getInviteStatus(invite);
 
-    const revoked = status === 'revogado';
-    const accepted = [
-      'accepted',
-      'aceito',
-      'utilizado',
-      'used',
-    ].includes(status);
-
-    const displayedStatus = revoked
-      ? 'Revogado'
-      : accepted
-        ? 'Utilizado'
-        : expired
-          ? 'Expirado'
-          : 'Pendente';
+    const revoked = displayedStatus === 'Revogado';
+    const accepted = displayedStatus === 'Utilizado';
+    const expired = displayedStatus === 'Expirado';
 
     return (
       <View key={invite.id} style={styles.inviteCard}>
         <View style={styles.inviteTop}>
           <View style={styles.inviteRole}>
             <Text style={styles.inviteRoleText}>
-              {invite.role}
+              {ROLE_LABELS[invite.role]}
             </Text>
           </View>
 
@@ -330,14 +316,18 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
         ) : null}
 
         <Text style={styles.codeLabel}>Código de convite</Text>
-        <Text style={styles.inviteCode}>{invite.code}</Text>
-
-        <Text style={styles.inviteDate}>
-          Criado em {formatDate(invite.createdAt)}
+        <Text style={styles.inviteToken} numberOfLines={1}>
+          {shortToken(invite.invite_token)}
         </Text>
 
         <Text style={styles.inviteDate}>
-          Válido até {formatDate(invite.expiresAt)}
+          Criado em {formatDate(invite.created_at)}
+        </Text>
+
+        <Text style={styles.inviteDate}>
+          {accepted && invite.used_at
+            ? `Utilizado em ${formatDate(invite.used_at)}`
+            : `Válido até ${formatDate(invite.expires_at)}`}
         </Text>
 
         {!revoked && !expired && !accepted && (
@@ -379,7 +369,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
         <Text style={styles.pageTitle}>Pessoas</Text>
 
         <Text style={styles.description}>
-          Gerencie os acessos de familiares e administradores à família.
+          Gerencie os acessos de familiares e cuidadores ao acompanhamento.
         </Text>
       </View>
 
@@ -412,19 +402,21 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     )}
   </View>
 
-  <Pressable
-    onPress={() => router.push('/cadastro-paciente')}
-    style={{
-      backgroundColor: PALE_BLUE,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 8,
-    }}
-  >
-    <Text style={{ color: DARK, fontSize: 11, fontWeight: '800' }}>
-      {patient ? 'Editar' : 'Cadastrar'}
-    </Text>
-  </Pressable>
+  {canEdit && (
+    <Pressable
+      onPress={() => router.push('/cadastro-paciente')}
+      style={{
+        backgroundColor: PALE_BLUE,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 8,
+      }}
+    >
+      <Text style={{ color: DARK, fontSize: 11, fontWeight: '800' }}>
+        {patient ? 'Editar' : 'Cadastrar'}
+      </Text>
+    </Pressable>
+  )}
 </View>
 
       <View style={styles.accountCard}>
@@ -442,7 +434,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
           </Text>
 
           <Text style={styles.accountRole}>
-            {user?.role ?? 'Familiar'}
+            {user ? ROLE_LABELS[user.role] : ''}
           </Text>
         </View>
 
@@ -468,6 +460,22 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
         </View>
       </View>
 
+      {!canManageInvites ? (
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>
+            Convites
+          </Text>
+
+          <Text style={styles.infoText}>
+            {user?.role !== 'family_admin'
+              ? 'Somente o familiar administrador pode convidar familiares e cuidadores.'
+              : patientLoading
+                ? 'Carregando paciente...'
+                : 'Cadastre o paciente acompanhado para começar a convidar familiares e cuidadores.'}
+          </Text>
+        </View>
+      ) : (
+      <>
       <View style={styles.statsRow}>
         <View style={styles.statCard}>
           <Text style={styles.statNumber}>
@@ -492,7 +500,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
       <Pressable
         style={styles.createButton}
-        onPress={() => setModalVisible(true)}
+        onPress={openInviteModal}
       >
         <Text style={styles.createButtonText}>
           + Criar convite
@@ -505,9 +513,9 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
         </Text>
 
         <Text style={styles.infoText}>
-          Gere um código para cada pessoa. O código identifica o tipo de
-          acesso solicitado, fica vinculado à sua família e possui
-          validade de 7 dias.
+          Gere um código para cada pessoa. O código define o tipo de
+          acesso (familiar ou cuidador), fica vinculado ao paciente,
+          vale por {INVITE_EXPIRATION_DAYS} dias e só pode ser usado uma vez.
         </Text>
       </View>
 
@@ -572,12 +580,14 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
           {revokedInvites.map(renderInvite)}
         </>
       )}
+      </>
+      )}
 
       <Modal
         visible={modalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setModalVisible(false)}
+        onRequestClose={closeInviteModal}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -609,13 +619,38 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
             <Pressable
               style={[
                 styles.roleOption,
-                selectedRole === 'Familiar' &&
+                selectedRole === 'caregiver' &&
                   styles.roleOptionSelected,
               ]}
-              onPress={() => setSelectedRole('Familiar')}
+              onPress={() => setSelectedRole('caregiver')}
             >
               <View style={styles.radio}>
-                {selectedRole === 'Familiar' && (
+                {selectedRole === 'caregiver' && (
+                  <View style={styles.radioSelected} />
+                )}
+              </View>
+
+              <View style={styles.roleInfo}>
+                <Text style={styles.roleTitle}>
+                  Cuidador
+                </Text>
+
+                <Text style={styles.roleDescription}>
+                  Registro e acompanhamento dos cuidados diários.
+                </Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.roleOption,
+                selectedRole === 'family' &&
+                  styles.roleOptionSelected,
+              ]}
+              onPress={() => setSelectedRole('family')}
+            >
+              <View style={styles.radio}>
+                {selectedRole === 'family' && (
                   <View style={styles.radioSelected} />
                 )}
               </View>
@@ -631,33 +666,8 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
               </View>
             </Pressable>
 
-            <Pressable
-              style={[
-                styles.roleOption,
-                selectedRole === 'Administrador' &&
-                  styles.roleOptionSelected,
-              ]}
-              onPress={() => setSelectedRole('Administrador')}
-            >
-              <View style={styles.radio}>
-                {selectedRole === 'Administrador' && (
-                  <View style={styles.radioSelected} />
-                )}
-              </View>
-
-              <View style={styles.roleInfo}>
-                <Text style={styles.roleTitle}>
-                  Administrador
-                </Text>
-
-                <Text style={styles.roleDescription}>
-                  Gerenciamento da família e dos acessos autorizados.
-                </Text>
-              </View>
-            </Pressable>
-
             <Text style={styles.expirationNote}>
-              O código terá validade de 7 dias.
+              O código terá validade de {INVITE_EXPIRATION_DAYS} dias.
             </Text>
 
             <Pressable
@@ -679,11 +689,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
 
             <Pressable
               style={styles.cancelButton}
-              onPress={() => {
-                setModalVisible(false);
-                setInviteName('');
-                setSelectedRole('Familiar');
-              }}
+              onPress={closeInviteModal}
             >
               <Text style={styles.cancelButtonText}>
                 Cancelar
@@ -931,6 +937,12 @@ const styles = StyleSheet.create({
     fontSize: 23,
     fontWeight: '900',
     letterSpacing: 2,
+  },
+  inviteToken: {
+    color: DARK,
+    fontSize: 14,
+    fontWeight: '800',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   inviteDate: {
     color: MUTED,

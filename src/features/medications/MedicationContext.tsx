@@ -9,8 +9,10 @@ import React, {
   type ReactNode,
 } from 'react';
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '../auth/AuthContext';
+import { usePatient } from '../patients/PatientContext';
+import { useLegacyMigration } from '../migration/LegacyMigrationContext';
+import { apiRequest, parseApiDate } from '../../services/apiClient';
+import { dateKey, parseDate, toApiPayload } from './medicationPayload';
 
 import type {
   Medicine,
@@ -44,25 +46,48 @@ type MedicationContextData = {
   ) => Promise<void>;
 };
 
-// ======================================================
-// ARMAZENAMENTO POR FAMÍLIA
-// ======================================================
+// Formatos devolvidos pela API (backend/app/schemas.py).
 
-const LEGACY_FAMILY_ID = 'aicare-legacy-family';
-
-const LEGACY_STORAGE_KEYS = {
-  medicines: '@aicare:medicines',
-  doses: '@aicare:dose-records',
-  movements: '@aicare:inventory-movements',
+type ApiMedication = {
+  id: number;
+  patient_id: number;
+  name: string;
+  dosage: string;
+  instructions: string | null;
+  first_dose_at: string | null;
+  interval_hours: number | null;
+  continuous: boolean;
+  start_date: string | null;
+  end_date: string | null;
+  stock_quantity: number | null;
+  stock_unit: string | null;
+  units_per_dose: number | null;
+  minimum_stock: number | null;
+  active: boolean;
+  created_at: string;
 };
 
-function getFamilyStorageKeys(familyId: string) {
-  return {
-    medicines: `@aicare:medicines:${familyId}`,
-    doses: `@aicare:dose-records:${familyId}`,
-    movements: `@aicare:inventory-movements:${familyId}`,
-  };
-}
+type ApiDoseRecord = {
+  id: number;
+  medication_id: number;
+  scheduled_at: string;
+  administered_at: string;
+  administered_by: number | null;
+  stock_deducted: number;
+  stock_unit: string | null;
+};
+
+type ApiMovement = {
+  id: number;
+  medication_id: number;
+  medication_name: string;
+  type: InventoryMovement['type'];
+  quantity: number;
+  unit: string;
+  description: string | null;
+  dose_record_id: number | null;
+  created_at: string;
+};
 
 // ======================================================
 // CONTEXTO
@@ -75,42 +100,6 @@ const MedicationContext = createContext<
 // ======================================================
 // FUNÇÕES AUXILIARES
 // ======================================================
-
-function dateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-
-  return `${year}-${month}-${day}`;
-}
-
-function parseDate(value: string): Date | null {
-  if (!value) return null;
-
-  let year: number;
-  let month: number;
-  let day: number;
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    [year, month, day] = value.split('-').map(Number);
-  } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
-    [day, month, year] = value.split('/').map(Number);
-  } else {
-    return null;
-  }
-
-  const date = new Date(year, month - 1, day);
-
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
-  ) {
-    return null;
-  }
-
-  return date;
-}
 
 function createLocalDateTime(date: Date, time: string): Date | null {
   const match = /^(\d{2}):(\d{2})$/.exec(time);
@@ -148,27 +137,67 @@ function isMedicineScheduledOnDate(
   return true;
 }
 
-function parseStockValue(value: string): number | null {
-  const normalized = value.trim().replace(',', '.');
+const numberToText = (value: number | null) =>
+  value === null || value === undefined ? '' : String(value);
 
-  if (!normalized) return null;
-
-  const parsed = Number(normalized);
-
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
-  }
-
-  return parsed;
+/** AAAA-MM-DD (API) -> DD/MM/AAAA (app). */
+function fromApiDate(value: string | null) {
+  if (!value) return '';
+  const [year, month, day] = value.split('-');
+  return `${day}/${month}/${year}`;
 }
 
-function createMovement(
-  data: Omit<InventoryMovement, 'id' | 'date'>,
-): InventoryMovement {
+/** Identificador da dose no app: medicamento + horário previsto (UTC). */
+const doseKey = (medicineId: string | number, scheduledAt: string) =>
+  `${medicineId}_${scheduledAt}`;
+
+function toMedicine(data: ApiMedication): Medicine {
   return {
-    ...data,
-    id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-    date: new Date().toISOString(),
+    id: String(data.id),
+    name: data.name,
+    dosage: data.dosage,
+    instructions: data.instructions ?? '',
+    // first_dose_at é a data/hora local da primeira dose: usa só HH:MM.
+    firstTime: data.first_dose_at ? data.first_dose_at.slice(11, 16) : '',
+    intervalHours: numberToText(data.interval_hours),
+    continuous: data.continuous,
+    startDate: fromApiDate(data.start_date),
+    endDate: fromApiDate(data.end_date),
+    stockQuantity: numberToText(data.stock_quantity),
+    stockUnit: data.stock_unit ?? '',
+    unitsPerDose: numberToText(data.units_per_dose),
+    minimumStock: numberToText(data.minimum_stock ?? 5),
+    active: data.active,
+    administered: false,
+  };
+}
+
+function toDoseRecord(data: ApiDoseRecord): DoseRecord {
+  const scheduledAt = parseApiDate(data.scheduled_at).toISOString();
+
+  return {
+    id: doseKey(data.medication_id, scheduledAt),
+    apiId: data.id,
+    medicineId: String(data.medication_id),
+    scheduledAt,
+    administeredAt: parseApiDate(data.administered_at).toISOString(),
+    stockDeducted: data.stock_deducted,
+    stockUnit: data.stock_unit ?? undefined,
+  };
+}
+
+function toMovement(data: ApiMovement): InventoryMovement {
+  return {
+    id: String(data.id),
+    medicineId: String(data.medication_id),
+    medicineName: data.medication_name,
+    type: data.type,
+    quantity: data.quantity,
+    unit: data.unit,
+    date: parseApiDate(data.created_at).toISOString(),
+    description: data.description ?? undefined,
+    doseRecordId:
+      data.dose_record_id !== null ? String(data.dose_record_id) : undefined,
   };
 }
 
@@ -181,13 +210,10 @@ export function MedicationProvider({
 }: {
   children: ReactNode;
 }) {
-  const { user, loading: authLoading } = useAuth();
+  const { patient, loading: patientLoading } = usePatient();
+  const { version: legacyImportVersion } = useLegacyMigration();
 
-  const familyId = user?.familyId ?? null;
-
-  const storageKeys = familyId
-    ? getFamilyStorageKeys(familyId)
-    : null;
+  const patientId = patient?.id ?? null;
 
   const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [doseRecords, setDoseRecords] = useState<DoseRecord[]>([]);
@@ -199,16 +225,25 @@ export function MedicationProvider({
 
   const requestId = useRef(0);
 
+  const requirePatient = () => {
+    if (!patientId) {
+      throw new Error(
+        'Cadastre o paciente acompanhado antes de gerenciar medicamentos.',
+      );
+    }
+    return patientId;
+  };
+
   // ----------------------------------------------------
-  // CARREGAR DADOS DO ACOMPANHAMENTO
+  // CARREGAR DADOS DO PACIENTE
   // ----------------------------------------------------
 
   const refreshMedicines = useCallback(async () => {
-    if (authLoading) return;
+    if (patientLoading) return;
 
     const currentRequest = ++requestId.current;
 
-    if (!familyId || !storageKeys) {
+    if (!patientId) {
       setMedicines([]);
       setDoseRecords([]);
       setInventoryMovements([]);
@@ -219,83 +254,21 @@ export function MedicationProvider({
     setLoading(true);
 
     try {
-      const [
-        storedMedicines,
-        storedDoses,
-        storedMovements,
-      ] = await Promise.all([
-        AsyncStorage.getItem(storageKeys.medicines),
-        AsyncStorage.getItem(storageKeys.doses),
-        AsyncStorage.getItem(storageKeys.movements),
+      const [apiMedicines, apiDoses, apiMovements] = await Promise.all([
+        apiRequest<ApiMedication[]>(`/patients/${patientId}/medications`),
+        apiRequest<ApiDoseRecord[]>(`/patients/${patientId}/doses`),
+        apiRequest<ApiMovement[]>(
+          `/patients/${patientId}/inventory-movements`,
+        ),
       ]);
-
-      let medicinesData = storedMedicines;
-      let dosesData = storedDoses;
-      let movementsData = storedMovements;
-
-      // Migração dos dados antigos da Maria.
-      // Somente a família legada pode receber esses dados.
-      if (familyId === LEGACY_FAMILY_ID) {
-        if (medicinesData === null) {
-          medicinesData = await AsyncStorage.getItem(
-            LEGACY_STORAGE_KEYS.medicines,
-          );
-        }
-
-        if (dosesData === null) {
-          dosesData = await AsyncStorage.getItem(
-            LEGACY_STORAGE_KEYS.doses,
-          );
-        }
-
-        if (movementsData === null) {
-          movementsData = await AsyncStorage.getItem(
-            LEGACY_STORAGE_KEYS.movements,
-          );
-        }
-      }
-
-      const parsedMedicines: Medicine[] = medicinesData
-        ? JSON.parse(medicinesData)
-        : [];
-
-      const normalizedMedicines = parsedMedicines.map((medicine) => ({
-        ...medicine,
-        minimumStock: medicine.minimumStock ?? '5',
-      }));
-
-      const parsedDoses: DoseRecord[] = dosesData
-        ? JSON.parse(dosesData)
-        : [];
-
-      const parsedMovements: InventoryMovement[] = movementsData
-        ? JSON.parse(movementsData)
-        : [];
 
       // Impede que uma consulta antiga sobrescreva os dados
-      // quando o usuário troca de acompanhamento durante o carregamento.
+      // quando o paciente muda durante o carregamento.
       if (currentRequest !== requestId.current) return;
 
-      await Promise.all([
-        AsyncStorage.setItem(
-          storageKeys.medicines,
-          JSON.stringify(normalizedMedicines),
-        ),
-        AsyncStorage.setItem(
-          storageKeys.doses,
-          JSON.stringify(parsedDoses),
-        ),
-        AsyncStorage.setItem(
-          storageKeys.movements,
-          JSON.stringify(parsedMovements),
-        ),
-      ]);
-
-      if (currentRequest !== requestId.current) return;
-
-      setMedicines(normalizedMedicines);
-      setDoseRecords(parsedDoses);
-      setInventoryMovements(parsedMovements);
+      setMedicines(apiMedicines.map(toMedicine));
+      setDoseRecords(apiDoses.map(toDoseRecord));
+      setInventoryMovements(apiMovements.map(toMovement));
     } catch (error) {
       console.error('Erro ao carregar medicamentos:', error);
 
@@ -309,143 +282,76 @@ export function MedicationProvider({
         setLoading(false);
       }
     }
-  }, [authLoading, familyId]);
+  }, [patientLoading, patientId]);
 
   // ----------------------------------------------------
-  // ATUALIZAÇÃO AO TROCAR DE CONTA
+  // ATUALIZAÇÃO AO TROCAR DE CONTA / PACIENTE
   // ----------------------------------------------------
 
   useEffect(() => {
-    if (authLoading) return;
+    if (patientLoading) return;
 
     void refreshMedicines();
 
     return () => {
       requestId.current += 1;
     };
-  }, [authLoading, familyId, refreshMedicines]);
+    // legacyImportVersion: recarrega após importar dados antigos do aparelho.
+  }, [patientLoading, patientId, legacyImportVersion, refreshMedicines]);
 
   // ----------------------------------------------------
-  // SALVAR DADOS
-  // ----------------------------------------------------
-
-  const saveMedicines = async (updatedMedicines: Medicine[]) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
-
-    await AsyncStorage.setItem(
-      storageKeys.medicines,
-      JSON.stringify(updatedMedicines),
-    );
-
-    setMedicines(updatedMedicines);
-  };
-
-  const saveDoseRecords = async (updatedRecords: DoseRecord[]) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
-
-    await AsyncStorage.setItem(
-      storageKeys.doses,
-      JSON.stringify(updatedRecords),
-    );
-
-    setDoseRecords(updatedRecords);
-  };
-
-  const saveInventoryMovements = async (
-    updatedMovements: InventoryMovement[],
-  ) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
-
-    await AsyncStorage.setItem(
-      storageKeys.movements,
-      JSON.stringify(updatedMovements),
-    );
-
-    setInventoryMovements(updatedMovements);
-  };
-
-  // ----------------------------------------------------
-  // CADASTRAR MEDICAMENTO
+  // CADASTRAR / EDITAR / EXCLUIR
   // ----------------------------------------------------
 
   const addMedicine = async (draft: MedicineDraft) => {
-    const newMedicine: Medicine = {
-      ...draft,
-      id: Date.now().toString(),
-      active: true,
-      administered: false,
-    };
+    const id = requirePatient();
 
-    await saveMedicines([...medicines, newMedicine]);
-  };
-
-  // ----------------------------------------------------
-  // EDITAR MEDICAMENTO
-  // ----------------------------------------------------
-
-  const updateMedicine = async (
-    id: string,
-    draft: MedicineDraft,
-  ) => {
-    const updatedMedicines = medicines.map((medicine) =>
-      medicine.id === id
-        ? { ...medicine, ...draft }
-        : medicine,
+    const created = await apiRequest<ApiMedication>(
+      `/patients/${id}/medications`,
+      { method: 'POST', body: toApiPayload(draft) },
     );
 
-    await saveMedicines(updatedMedicines);
+    setMedicines((current) => [...current, toMedicine(created)]);
   };
 
-  // ----------------------------------------------------
-  // EXCLUIR MEDICAMENTO
-  // ----------------------------------------------------
+  const updateMedicine = async (id: string, draft: MedicineDraft) => {
+    const updated = await apiRequest<ApiMedication>(`/medications/${id}`, {
+      method: 'PUT',
+      body: toApiPayload(draft),
+    });
+
+    setMedicines((current) =>
+      current.map((medicine) =>
+        medicine.id === id ? toMedicine(updated) : medicine,
+      ),
+    );
+  };
 
   const deleteMedicine = async (id: string) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
+    await apiRequest<void>(`/medications/${id}`, { method: 'DELETE' });
 
-    const updatedMedicines = medicines.filter(
-      (medicine) => medicine.id !== id,
+    // A API também remove o histórico de doses e de estoque.
+    setMedicines((current) => current.filter((item) => item.id !== id));
+    setDoseRecords((current) =>
+      current.filter((record) => record.medicineId !== id),
     );
-
-    const updatedRecords = doseRecords.filter(
-      (record) => record.medicineId !== id,
+    setInventoryMovements((current) =>
+      current.filter((movement) => movement.medicineId !== id),
     );
-
-    const updatedMovements = inventoryMovements.filter(
-      (movement) => movement.medicineId !== id,
-    );
-
-    await AsyncStorage.multiSet([
-      [storageKeys.medicines, JSON.stringify(updatedMedicines)],
-      [storageKeys.doses, JSON.stringify(updatedRecords)],
-      [storageKeys.movements, JSON.stringify(updatedMovements)],
-    ]);
-
-    setMedicines(updatedMedicines);
-    setDoseRecords(updatedRecords);
-    setInventoryMovements(updatedMovements);
   };
 
-  // ----------------------------------------------------
-  // ATIVAR / DESATIVAR MEDICAMENTO
-  // ----------------------------------------------------
-
   const toggleMedicine = async (id: string) => {
-    const updatedMedicines = medicines.map((medicine) =>
-      medicine.id === id
-        ? { ...medicine, active: !medicine.active }
-        : medicine,
-    );
+    const medicine = medicines.find((item) => item.id === id);
+    if (!medicine) return;
 
-    await saveMedicines(updatedMedicines);
+    const updated = await apiRequest<ApiMedication>(`/medications/${id}`, {
+      method: 'PUT',
+      body: { active: !medicine.active },
+    });
+
+    setMedicines((current) =>
+      current.map((item) => (item.id === id ? toMedicine(updated) : item)),
+    );
   };
 
   // ----------------------------------------------------
@@ -493,7 +399,7 @@ export function MedicationProvider({
           }
 
           const scheduledAt = scheduledDate.toISOString();
-          const id = `${medicine.id}_${scheduledAt}`;
+          const id = doseKey(medicine.id, scheduledAt);
 
           const record = doseRecords.find(
             (item) => item.id === id,
@@ -525,13 +431,11 @@ export function MedicationProvider({
   };
 
   // ----------------------------------------------------
-  // ADMINISTRAR DOSE
+  // ADMINISTRAR / DESFAZER DOSE
   // ----------------------------------------------------
 
   const administerDose = async (doseId: string) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
+    requirePatient();
 
     const dose = getDosesForDate().find(
       (item) => item.id === doseId,
@@ -545,169 +449,27 @@ export function MedicationProvider({
       return;
     }
 
-    const medicine = medicines.find(
-      (item) => item.id === dose.medicine.id,
+    // A API registra a dose e dá baixa no estoque na mesma operação.
+    await apiRequest<ApiDoseRecord>(
+      `/medications/${dose.medicine.id}/doses`,
+      { method: 'POST', body: { scheduled_at: dose.scheduledAt } },
     );
 
-    if (!medicine) {
-      throw new Error('Medicamento não encontrado.');
-    }
-
-    const stock = parseStockValue(medicine.stockQuantity);
-    const consumption = parseStockValue(medicine.unitsPerDose);
-
-    let stockDeducted = 0;
-    let stockUnit: string | undefined;
-
-    const hasStockConfiguration =
-      medicine.stockQuantity.trim() !== '' &&
-      medicine.unitsPerDose.trim() !== '' &&
-      medicine.stockUnit.trim() !== '';
-
-    if (hasStockConfiguration) {
-      if (stock === null || consumption === null || consumption <= 0) {
-        throw new Error(
-          'Confira a quantidade em estoque e o consumo por dose antes de administrar.',
-        );
-      }
-
-      if (stock < consumption) {
-        throw new Error(
-          `Estoque insuficiente de ${medicine.name}. Disponível: ${stock} ${medicine.stockUnit}. Necessário: ${consumption} ${medicine.stockUnit}.`,
-        );
-      }
-
-      stockDeducted = consumption;
-      stockUnit = medicine.stockUnit;
-    }
-
-    const newRecord: DoseRecord = {
-      id: doseId,
-      medicineId: medicine.id,
-      scheduledAt: dose.scheduledAt,
-      administeredAt: new Date().toISOString(),
-      stockDeducted,
-      stockUnit,
-    };
-
-    const updatedMedicines = medicines.map((item) =>
-      item.id === medicine.id
-        ? {
-            ...item,
-            stockQuantity:
-              stockDeducted > 0
-                ? String(Number((stock! - stockDeducted).toFixed(4)))
-                : item.stockQuantity,
-          }
-        : item,
-    );
-
-    let updatedMovements = inventoryMovements;
-
-    if (stockDeducted > 0 && stockUnit) {
-      updatedMovements = [
-        ...inventoryMovements,
-        createMovement({
-          medicineId: medicine.id,
-          medicineName: medicine.name,
-          type: 'administration',
-          quantity: stockDeducted,
-          unit: stockUnit,
-          description: 'Saída por administração de dose',
-          doseRecordId: doseId,
-        }),
-      ];
-    }
-
-    const updatedRecords = [...doseRecords, newRecord];
-
-    await AsyncStorage.multiSet([
-      [storageKeys.medicines, JSON.stringify(updatedMedicines)],
-      [storageKeys.doses, JSON.stringify(updatedRecords)],
-      [storageKeys.movements, JSON.stringify(updatedMovements)],
-    ]);
-
-    setMedicines(updatedMedicines);
-    setDoseRecords(updatedRecords);
-    setInventoryMovements(updatedMovements);
+    await refreshMedicines();
   };
 
-  // ----------------------------------------------------
-  // DESFAZER ADMINISTRAÇÃO
-  // ----------------------------------------------------
-
   const undoDose = async (doseId: string) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
-
     const record = doseRecords.find(
       (item) => item.id === doseId,
     );
 
-    if (!record) return;
+    if (!record?.apiId) return;
 
-    const updatedMedicines = medicines.map((medicine) => {
-      if (
-        medicine.id !== record.medicineId ||
-        !record.stockDeducted ||
-        record.stockDeducted <= 0
-      ) {
-        return medicine;
-      }
-
-      const currentStock = parseStockValue(medicine.stockQuantity);
-
-      if (currentStock === null) {
-        return medicine;
-      }
-
-      return {
-        ...medicine,
-        stockQuantity: String(
-          Number(
-            (currentStock + record.stockDeducted).toFixed(4),
-          ),
-        ),
-      };
+    await apiRequest<void>(`/doses/${record.apiId}`, {
+      method: 'DELETE',
     });
 
-    let updatedMovements = inventoryMovements;
-
-    if (record.stockDeducted && record.stockDeducted > 0) {
-      const medicine = medicines.find(
-        (item) => item.id === record.medicineId,
-      );
-
-      if (medicine) {
-        updatedMovements = [
-          ...inventoryMovements,
-          createMovement({
-            medicineId: medicine.id,
-            medicineName: medicine.name,
-            type: 'reversal',
-            quantity: record.stockDeducted,
-            unit: record.stockUnit ?? medicine.stockUnit,
-            description: 'Estorno de administração',
-            doseRecordId: doseId,
-          }),
-        ];
-      }
-    }
-
-    const updatedRecords = doseRecords.filter(
-      (item) => item.id !== doseId,
-    );
-
-    await AsyncStorage.multiSet([
-      [storageKeys.medicines, JSON.stringify(updatedMedicines)],
-      [storageKeys.doses, JSON.stringify(updatedRecords)],
-      [storageKeys.movements, JSON.stringify(updatedMovements)],
-    ]);
-
-    setMedicines(updatedMedicines);
-    setDoseRecords(updatedRecords);
-    setInventoryMovements(updatedMovements);
+    await refreshMedicines();
   };
 
   // ----------------------------------------------------
@@ -719,65 +481,19 @@ export function MedicationProvider({
     quantity: number,
     description?: string,
   ) => {
-    if (!storageKeys || !familyId) {
-      throw new Error('Nenhum acompanhamento está selecionado.');
-    }
-
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new Error('Informe uma quantidade válida para reposição.');
     }
 
-    const medicine = medicines.find(
-      (item) => item.id === medicineId,
+    await apiRequest<ApiMovement>(
+      `/medications/${medicineId}/stock-entries`,
+      {
+        method: 'POST',
+        body: { quantity, description: description?.trim() || null },
+      },
     );
 
-    if (!medicine) {
-      throw new Error('Medicamento não encontrado.');
-    }
-
-    if (!medicine.stockUnit.trim()) {
-      throw new Error(
-        'Cadastre a unidade de estoque antes de fazer a reposição.',
-      );
-    }
-
-    const currentStock = parseStockValue(medicine.stockQuantity);
-
-    if (currentStock === null) {
-      throw new Error(
-        'A quantidade atual do estoque não é válida.',
-      );
-    }
-
-    const newStock = Number((currentStock + quantity).toFixed(4));
-
-    const updatedMedicines = medicines.map((item) =>
-      item.id === medicineId
-        ? { ...item, stockQuantity: String(newStock) }
-        : item,
-    );
-
-    const newMovement = createMovement({
-      medicineId: medicine.id,
-      medicineName: medicine.name,
-      type: 'entry',
-      quantity,
-      unit: medicine.stockUnit,
-      description: description?.trim() || 'Reposição de estoque',
-    });
-
-    const updatedMovements = [
-      ...inventoryMovements,
-      newMovement,
-    ];
-
-    await AsyncStorage.multiSet([
-      [storageKeys.medicines, JSON.stringify(updatedMedicines)],
-      [storageKeys.movements, JSON.stringify(updatedMovements)],
-    ]);
-
-    setMedicines(updatedMedicines);
-    setInventoryMovements(updatedMovements);
+    await refreshMedicines();
   };
 
   // ====================================================
@@ -790,7 +506,7 @@ export function MedicationProvider({
         medicines,
         doseRecords,
         inventoryMovements,
-        loading,
+        loading: loading || patientLoading,
         refreshMedicines,
         addMedicine,
         updateMedicine,

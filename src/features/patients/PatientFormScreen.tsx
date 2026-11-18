@@ -102,10 +102,12 @@ export default function PatientFormScreen() {
           },
         ],
       );
-    } catch {
+    } catch (error) {
       Alert.alert(
         'Erro',
-        'Não foi possível salvar o cadastro. Tente novamente.',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível salvar o cadastro. Tente novamente.',
       );
     } finally {
       setSaving(false);

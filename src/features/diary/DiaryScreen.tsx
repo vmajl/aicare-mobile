@@ -17,7 +17,6 @@ import { Alert } from '../../utils/platformAlert';
 import { getPersistablePhotoUri } from '../../utils/photoUri';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { Directory, File, Paths } from 'expo-file-system';
 import {
   Camera,
   ChevronLeft,
@@ -31,34 +30,26 @@ import {
   Send,
 } from 'lucide-react-native';
 import { usePatient } from '../patients/PatientContext';
+import { useLegacyMigration } from '../migration/LegacyMigrationContext';
+import {
+  deleteDiaryRecord,
+  listDiaryRecords,
+  photoToDataUrl,
+  saveDiaryRecord,
+  type DiaryRecord,
+} from './diaryApi';
 
 const BLUE = '#50A9C3';
 const DARK = '#102F40';
 const MUTED = '#6D8794';
 const BORDER = '#D8E3E8';
-const STORAGE_KEY = '@aicare:diary-records';
+// Foto enviada pela tela inicial (URI local), aguardando publicação.
 const PENDING_HOME_PHOTO_KEY = '@aicare:pending-home-photo';
-const PHOTO_DATES_KEY = '@aicare:diary-photo-dates';
 
-function getPhotoDirectory(): Directory | null {
-  if (Platform.OS === 'web') return null;
-  return new Directory(Paths.document, 'diary-photos');
-}
-
-function isPermanentPhoto(uri: string | null) {
-  if (!uri || Platform.OS === 'web') return false;
-
-  const directory = getPhotoDirectory();
-  return Boolean(directory && uri.startsWith(directory.uri));
-}
-
-type DiaryRecord = {
-  date: string;
-  imageUri: string | null;
-  observation: string;
-  createdAt: string;
-  updatedAt?: string;
-};
+const photoDatesFrom = (items: DiaryRecord[]) =>
+  Array.from(
+    new Set(items.filter(record => Boolean(record.imageUri)).map(record => record.date)),
+  );
 
 const MONTHS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril',
@@ -120,9 +111,14 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     date: string;
   } | null>(null);
 
+  const patientId = patient?.id ?? null;
+  const { version: legacyImportVersion } = useLegacyMigration();
+
   useEffect(() => {
-    loadRecords();
-  }, []);
+    if (patientLoading) return;
+    void loadRecords();
+    // legacyImportVersion: recarrega após importar o diário antigo do aparelho.
+  }, [patientId, patientLoading, legacyImportVersion]);
 
   useEffect(() => {
     const refreshToday = () => {
@@ -183,37 +179,16 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   const canAddPhoto = selectedDateIsToday && !selectedDateHasPhoto;
 
   async function loadRecords() {
+    setLoading(true);
+
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
-      let normalizedRecords: DiaryRecord[] = [];
+      const loadedRecords = patientId
+        ? await listDiaryRecords(patientId)
+        : [];
 
-      if (stored) {
-        const parsed = JSON.parse(stored);
-
-        // Mantém compatibilidade com os registros da versão anterior.
-        normalizedRecords = parsed.map(
-          (record: any) => ({
-            date: record.date,
-            imageUri: record.imageUri || null,
-            observation: record.observation ?? '',
-            createdAt: record.createdAt || new Date().toISOString(),
-            updatedAt: record.updatedAt,
-          })
-        );
-      }
-
-      // A lista de datas com foto é reconstruída a partir das publicações
-      // existentes. Assim, uma data deixa de ficar bloqueada quando a
-      // publicação correspondente é excluída.
-      const datesWithExistingPhotos = normalizedRecords
-        .filter(record => Boolean(record.imageUri))
-        .map(record => record.date);
-      const currentPhotoDates = Array.from(new Set(datesWithExistingPhotos));
-      setPhotoDates(currentPhotoDates);
-      await AsyncStorage.setItem(
-        PHOTO_DATES_KEY,
-        JSON.stringify(currentPhotoDates)
-      );
+      // As datas com foto vêm das publicações existentes. Assim, uma data
+      // deixa de ficar bloqueada quando a publicação é excluída.
+      setPhotoDates(photoDatesFrom(loadedRecords));
 
       // Verifica se a Home encaminhou uma foto para o Diário.
       const pendingPhoto = await AsyncStorage.getItem(
@@ -232,72 +207,27 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
       }
 
       // Atualiza mesmo quando ainda não existem publicações salvas.
-      setRecords(normalizedRecords);
-    } catch {
-      Alert.alert('Erro', 'Não foi possível carregar o Diário.');
+      setRecords(loadedRecords);
+    } catch (error) {
+      Alert.alert(
+        'Erro',
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível carregar o Diário.',
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  async function persistRecords(updatedRecords: DiaryRecord[]) {
-    await AsyncStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(updatedRecords)
-    );
+  function applySavedRecord(saved: DiaryRecord | null, date: string) {
+    const updatedRecords = [
+      ...records.filter(record => record.date !== date),
+      ...(saved ? [saved] : []),
+    ].sort((a, b) => a.date.localeCompare(b.date));
 
     setRecords(updatedRecords);
-  }
-
-  async function ensurePhotoDirectory() {
-    if (Platform.OS === 'web') return null;
-
-    const directory = getPhotoDirectory();
-    if (!directory) return null;
-
-    directory.create({
-      idempotent: true,
-      intermediates: true,
-    });
-
-    return directory;
-  }
-
-  async function savePhotoPermanently(
-    temporaryUri: string,
-    recordDate: string,
-  ) {
-    // Na Web, mantém a imagem em formato persistente no armazenamento local.
-    if (Platform.OS === 'web') {
-      return temporaryUri;
-    }
-
-    const directory = await ensurePhotoDirectory();
-    if (!directory) return temporaryUri;
-
-    const fileName = `diary-${recordDate}-${Date.now()}.jpg`;
-    const destination = new File(directory, fileName);
-    const source = new File(temporaryUri);
-
-    await source.copy(destination);
-
-    return destination.uri;
-  }
-
-  async function removeStoredPhoto(uri: string | null) {
-    if (!uri || Platform.OS === 'web') return;
-
-    try {
-      const directory = getPhotoDirectory();
-      if (!directory || !uri.startsWith(directory.uri)) return;
-
-      const file = new File(uri);
-      if (file.exists) {
-        file.delete();
-      }
-    } catch {
-      // Uma falha na exclusão do arquivo não interrompe o Diário.
-    }
+    setPhotoDates(photoDatesFrom(updatedRecords));
   }
 
   const calendarDays = useMemo(() => {
@@ -472,6 +402,14 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   async function publishPost() {
+    if (!patientId) {
+      Alert.alert(
+        'Paciente não cadastrado',
+        'Cadastre o paciente acompanhado antes de publicar no Diário.'
+      );
+      return;
+    }
+
     const trimmedObservation = observation.trim();
 
     if (!trimmedObservation && !draftImageUri) {
@@ -516,74 +454,23 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
     try {
       setSaving(true);
 
-      let permanentUri: string | null = draftImageUri;
+      // undefined = mantém a foto atual; null = remove; data URL = nova foto.
+      let photoData: string | null | undefined;
 
-      // Se a foto selecionada for temporária, copia para a pasta permanente.
-      if (
-        draftImageUri &&
-        !isPermanentPhoto(draftImageUri)
-      ) {
-        permanentUri = await savePhotoPermanently(
-          draftImageUri,
-          selectedDate
-        );
+      if (draftImageUri !== (previousRecord?.imageUri ?? null)) {
+        photoData = draftImageUri
+          ? await photoToDataUrl(draftImageUri)
+          : null;
       }
 
-      const now = new Date().toISOString();
+      const saved = await saveDiaryRecord(
+        patientId,
+        selectedDate,
+        trimmedObservation,
+        photoData,
+      );
 
-      const updatedRecord: DiaryRecord = {
-        date: selectedDate,
-        imageUri: permanentUri,
-        observation: trimmedObservation,
-        createdAt: previousRecord?.createdAt ?? now,
-        updatedAt: previousRecord ? now : undefined,
-      };
-
-      const updatedRecords = [
-        ...records.filter(record => record.date !== selectedDate),
-        updatedRecord,
-      ].sort((a, b) => a.date.localeCompare(b.date));
-
-      try {
-        await persistRecords(updatedRecords);
-      } catch (error) {
-        // Se a gravação falhar, remove somente a nova cópia criada.
-        if (
-          permanentUri &&
-          permanentUri !== previousRecord?.imageUri &&
-          isPermanentPhoto(permanentUri)
-        ) {
-          await removeStoredPhoto(permanentUri);
-        }
-
-        throw error;
-      }
-
-      if (isAddingNewPhoto) {
-        const updatedPhotoDates = Array.from(
-          new Set([...photoDates, selectedDate])
-        );
-        setPhotoDates(updatedPhotoDates);
-
-        // O próprio registro também funciona como proteção caso esta gravação falhe.
-        try {
-          await AsyncStorage.setItem(
-            PHOTO_DATES_KEY,
-            JSON.stringify(updatedPhotoDates)
-          );
-        } catch {
-          // Na próxima abertura, as datas com fotos serão reconstruídas pelos registros.
-        }
-      }
-
-      // Só remove a foto anterior depois que a publicação foi salva.
-      if (
-        previousRecord?.imageUri &&
-        previousRecord.imageUri !== permanentUri
-      ) {
-        await removeStoredPhoto(previousRecord.imageUri);
-      }
-
+      applySavedRecord(saved, selectedDate);
       setIsEditing(false);
 
       Alert.alert(
@@ -592,10 +479,12 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
           ? 'As alterações foram salvas no Diário.'
           : 'Sua publicação foi adicionada ao Diário.'
       );
-    } catch {
+    } catch (error) {
       Alert.alert(
         'Erro',
-        'Não foi possível salvar a publicação. Tente novamente.'
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível salvar a publicação. Tente novamente.'
       );
     } finally {
       setSaving(false);
@@ -603,7 +492,7 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
   }
 
   function deletePost() {
-    if (!selectedRecord) return;
+    if (!selectedRecord || !patientId) return;
 
     Alert.alert(
       'Excluir publicação',
@@ -615,29 +504,11 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
           style: 'destructive',
           onPress: async () => {
             try {
-              const recordToDelete = selectedRecord;
-
-              const updatedRecords = records.filter(
-                record => record.date !== selectedDate
-              );
-
-              await persistRecords(updatedRecords);
-
-              if (recordToDelete.imageUri) {
-                await removeStoredPhoto(recordToDelete.imageUri);
-              }
+              await deleteDiaryRecord(patientId, selectedDate);
 
               // Excluir a publicação também libera a cota de foto do dia.
               // Isso permite registrar outra foto na mesma data, se ainda for hoje.
-              const updatedPhotoDates = updatedRecords
-                .filter(record => Boolean(record.imageUri))
-                .map(record => record.date);
-              const uniquePhotoDates = Array.from(new Set(updatedPhotoDates));
-              setPhotoDates(uniquePhotoDates);
-              await AsyncStorage.setItem(
-                PHOTO_DATES_KEY,
-                JSON.stringify(uniquePhotoDates)
-              );
+              applySavedRecord(null, selectedDate);
 
               setIsEditing(false);
               setExpandedPhoto(false);
@@ -646,10 +517,12 @@ const patientInitial = patient?.name?.trim().charAt(0).toUpperCase() || '?';
                 'Publicação excluída',
                 'O registro foi removido do Diário.'
               );
-            } catch {
+            } catch (error) {
               Alert.alert(
                 'Erro',
-                'Não foi possível excluir a publicação.'
+                error instanceof Error
+                  ? error.message
+                  : 'Não foi possível excluir a publicação.'
               );
             }
           },
